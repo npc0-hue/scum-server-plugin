@@ -1,0 +1,110 @@
+{
+  "schemaVersion": "scum-plugin.v1",
+  "pluginId": "scum-admin",
+  "name": "SCUM Admin",
+  "version": "0.1.0",
+  "channel": "dev",
+  "compatibility": {
+    "minScumServerVersion": "1.0.0",
+    "maxScumServerVersion": "2.0.0"
+  },
+  "runtime": {
+    "image": "local/scum-admin-plugin:0.1.0",
+    "internalPorts": [],
+    "exposedPorts": [],
+    "portMappings": [],
+    "mounts": [],
+    "privileged": false,
+    "hostNetwork": false
+  },
+  "capabilities": [
+    {
+      "key": "file.read",
+      "version": "1",
+      "riskLevel": "medium"
+    },
+    {
+      "key": "file.patch",
+      "version": "1",
+      "riskLevel": "high"
+    },
+    {
+      "key": "db.query",
+      "version": "1",
+      "riskLevel": "medium"
+    }
+  ],
+  "permissions": [
+    {
+      "key": "scum.config.read",
+      "riskLevel": "medium",
+      "description": "读取实例范围内的 SCUM ServerSettings.ini 配置。",
+      "parameters": {
+        "path": "SCUM/Saved/Config/WindowsServer/ServerSettings.ini"
+      }
+    },
+    {
+      "key": "scum.config.patch",
+      "riskLevel": "high",
+      "description": "通过受控 diff 修改实例范围内的 SCUM ServerSettings.ini 配置。",
+      "parameters": {
+        "path": "SCUM/Saved/Config/WindowsServer/ServerSettings.ini",
+        "requiresChecksum": true
+      }
+    },
+    {
+      "key": "scum.db.query.readonly",
+      "riskLevel": "medium",
+      "description": "通过受控只读查询读取实例绑定的 SCUM.db。",
+      "parameters": {
+        "databaseRef": "scum-main",
+        "readOnly": true
+      }
+    }
+  ],
+  "frontend": {
+    "bundle": {
+      "url": "/plugins/scum-admin/app.js",
+      "entry": "main",
+      "pluginId": "scum-admin",
+      "pluginVersion": "0.1.0"
+    },
+    "compatibility": {
+      "minWebShellVersion": "1.0.0",
+      "maxWebShellVersion": "2.0.0"
+    },
+    "apiBasePath": "/api/plugins/scum-admin",
+    "menus": [
+      {
+        "key": "settings",
+        "title": "SCUM 配置",
+        "icon": "material-symbols:settings-outline",
+        "order": 20,
+        "routeKey": "settings",
+        "requiredPermissions": ["scum.config.read"],
+        "instanceScope": {
+          "required": true,
+          "permission": "read"
+        }
+      }
+    ],
+    "routes": [
+      {
+        "key": "settings",
+        "title": "SCUM 配置",
+        "path": "/settings",
+        "bundleEntry": "main",
+        "apiBasePath": "/api/plugins/scum-admin/settings",
+        "requiredPermissions": ["scum.config.read"],
+        "instanceScope": {
+          "required": true,
+          "permission": "read"
+        }
+      }
+    ]
+  },
+  "update": {
+    "autoUpdatePolicy": "manual",
+    "releaseNotes": "SCUM 配置和只读数据库访问首个插件切片。"
+  }
+}
