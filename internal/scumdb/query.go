@@ -15,9 +15,11 @@ const (
 var blockedSQLPattern = regexp.MustCompile(`(?i)\b(insert|update|delete|replace|drop|alter|create|truncate|vacuum|attach|detach|reindex|begin|commit|rollback|pragma)\b`)
 
 var templates = map[string]string{
-	"players.summary":  "SELECT id, name, fame_points FROM prisoner ORDER BY name LIMIT ?",
-	"vehicles.summary": "SELECT id, vehicle_type, owner_prisoner_id FROM vehicle ORDER BY id LIMIT ?",
-	"world.zones":      "SELECT id, name FROM zone ORDER BY id LIMIT ?",
+	"players.summary":     "SELECT id, name, fame_points FROM prisoner ORDER BY name LIMIT ?",
+	"vehicles.summary":    "SELECT id, vehicle_type, owner_prisoner_id FROM vehicle ORDER BY id LIMIT ?",
+	"territories.summary": "SELECT id, name, owner_prisoner_id FROM squad ORDER BY id LIMIT ?",
+	"locks.summary":       "SELECT id, lock_type, owner_prisoner_id FROM lock ORDER BY id LIMIT ?",
+	"world.zones":         "SELECT id, name FROM zone ORDER BY id LIMIT ?",
 }
 
 // BuildPlan validates a SCUM.db query request and returns a bounded read-only query plan.

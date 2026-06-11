@@ -2,14 +2,14 @@
   "schemaVersion": "scum-plugin.v1",
   "pluginId": "scum-admin",
   "name": "SCUM Admin",
-  "version": "0.1.0",
-  "channel": "dev",
+  "version": "0.1.3",
+  "channel": "stable",
   "compatibility": {
     "minScumServerVersion": "1.0.0",
     "maxScumServerVersion": "2.0.0"
   },
   "runtime": {
-    "image": "local/scum-admin-plugin:0.1.0",
+    "image": "npc0/scum-admin-plugin:v0.1.3",
     "internalPorts": [],
     "exposedPorts": [],
     "portMappings": [],
@@ -18,6 +18,23 @@
     "hostNetwork": false
   },
   "capabilities": [
+    {
+      "key": "artifact.read",
+      "version": "1",
+      "riskLevel": "low"
+    },
+    {
+      "key": "db.query",
+      "version": "1",
+      "riskLevel": "medium",
+      "parameters": {
+        "execution": "bound-run-endpoint",
+        "databaseRef": "scum-main",
+        "readOnly": true,
+        "maxRows": 500,
+        "maxBytes": 1048576
+      }
+    },
     {
       "key": "file.read",
       "version": "1",
@@ -29,9 +46,34 @@
       "riskLevel": "high"
     },
     {
-      "key": "db.query",
+      "key": "log.read",
       "version": "1",
       "riskLevel": "medium"
+    },
+    {
+      "key": "process.control",
+      "version": "1",
+      "riskLevel": "high"
+    },
+    {
+      "key": "steam.news",
+      "version": "1",
+      "riskLevel": "low"
+    },
+    {
+      "key": "steamcmd.update",
+      "version": "1",
+      "riskLevel": "high"
+    },
+    {
+      "key": "task.query",
+      "version": "1",
+      "riskLevel": "medium"
+    },
+    {
+      "key": "task.run",
+      "version": "1",
+      "riskLevel": "high"
     }
   ],
   "permissions": [
@@ -53,55 +95,212 @@
       }
     },
     {
-      "key": "scum.db.query.readonly",
+      "key": "scum.database.query",
       "riskLevel": "medium",
-      "description": "通过受控只读查询读取实例绑定的 SCUM.db。",
+      "description": "提交实例绑定 SCUM.db 的只读查询计划；查询只能由绑定 run 执行端执行。",
       "parameters": {
         "databaseRef": "scum-main",
-        "readOnly": true
+        "readOnly": true,
+        "execution": "bound-run-endpoint"
       }
+    },
+    {
+      "key": "scum.players.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 玩家列表、详情、轨迹和资产视图。"
+    },
+    {
+      "key": "scum.players.mutate",
+      "riskLevel": "high",
+      "description": "提交玩家踢出、封禁、传送、技能或资产调整等高危任务。"
+    },
+    {
+      "key": "scum.vehicles.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 载具列表、归属和状态视图。"
+    },
+    {
+      "key": "scum.vehicles.mutate",
+      "riskLevel": "high",
+      "description": "提交载具召回、删除、归属调整等高危任务。"
+    },
+    {
+      "key": "scum.territories.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 领地、区域和小队相关视图。"
+    },
+    {
+      "key": "scum.territories.mutate",
+      "riskLevel": "high",
+      "description": "提交领地、区域或小队修正等高危任务。"
+    },
+    {
+      "key": "scum.locks.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 锁具和开锁记录视图。"
+    },
+    {
+      "key": "scum.locks.mutate",
+      "riskLevel": "high",
+      "description": "提交开锁、锁具修正或锁具删除等高危任务。"
+    },
+    {
+      "key": "scum.gifts.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 礼包规则、发放记录和统计。"
+    },
+    {
+      "key": "scum.gifts.mutate",
+      "riskLevel": "high",
+      "description": "创建、修改、删除或发放 SCUM 礼包规则。"
+    },
+    {
+      "key": "scum.events.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 事件、事件产物和活动配置。"
+    },
+    {
+      "key": "scum.events.mutate",
+      "riskLevel": "high",
+      "description": "创建、修改、删除或触发 SCUM 事件产物。"
+    },
+    {
+      "key": "scum.economy.read",
+      "riskLevel": "low",
+      "description": "读取插件自有交易物品、价格和物品图片元数据。"
+    },
+    {
+      "key": "scum.economy.mutate",
+      "riskLevel": "high",
+      "description": "提交交易物品、经济配置或兑换规则变更任务。"
+    },
+    {
+      "key": "scum.logs.read",
+      "riskLevel": "medium",
+      "description": "读取有界 SCUM 日志、性能日志和告警片段。"
+    },
+    {
+      "key": "scum.steam.read",
+      "riskLevel": "low",
+      "description": "读取 Steam 新闻和版本元数据。"
+    },
+    {
+      "key": "scum.update.mutate",
+      "riskLevel": "high",
+      "description": "提交 SteamCMD 安装、服务端更新或更新计划任务。"
+    },
+    {
+      "key": "scum.restart.mutate",
+      "riskLevel": "high",
+      "description": "提交实例受控重启或计划重启任务。"
+    },
+    {
+      "key": "scum.tasks.read",
+      "riskLevel": "medium",
+      "description": "读取 SCUM 插件提交的任务状态、结果摘要和稳定错误。"
     }
   ],
   "frontend": {
     "bundle": {
-      "url": "/plugins/scum-admin/app.js",
+      "url": "/plugin-assets/scum-admin/0.1.3/index.html",
       "entry": "main",
       "pluginId": "scum-admin",
-      "pluginVersion": "0.1.0"
+      "pluginVersion": "0.1.3"
     },
     "compatibility": {
       "minWebShellVersion": "1.0.0",
       "maxWebShellVersion": "2.0.0"
     },
     "apiBasePath": "/api/plugins/scum-admin",
+    "bridge": {
+      "minBridgeVersion": "1.0.0",
+      "maxBridgeVersion": "1.0.0",
+      "minSdkVersion": "0.1.0",
+      "maxSdkVersion": "0.1.0",
+      "allowedMessageTypes": [
+        "plugin.handshake",
+        "plugin.ready",
+        "plugin.error",
+        "plugin.height",
+        "plugin.navigate",
+        "plugin.api.request"
+      ],
+      "sandbox": {
+        "flags": ["allow-scripts", "allow-forms", "allow-same-origin"]
+      },
+      "apiProxy": {
+        "enabled": true,
+        "allowedMethods": ["GET", "PATCH", "POST"],
+        "maxBodyBytes": 65536,
+        "maxResponseBytes": 65536
+      },
+      "contextFields": [
+        "pluginId",
+        "pluginVersion",
+        "pluginInstallationId",
+        "routeKey",
+        "routeSuffix",
+        "apiBasePath",
+        "serverInstanceId",
+        "locale",
+        "theme",
+        "bridgeVersion",
+        "sdkVersion",
+        "requestId",
+        "traceId",
+        "capabilities"
+      ]
+    },
     "menus": [
-      {
-        "key": "settings",
-        "title": "SCUM 配置",
-        "icon": "material-symbols:settings-outline",
-        "order": 20,
-        "routeKey": "settings",
-        "requiredPermissions": ["scum.config.read"],
-        "instanceScope": {
-          "required": true,
-          "permission": "read"
-        }
-      }
+      {"key": "settings", "title": "SCUM 配置", "icon": "material-symbols:settings-outline", "order": 20, "routeKey": "settings", "requiredPermissions": ["scum.config.read"], "instanceScope": {"required": true, "permission": "read"}},
+      {"key": "players", "title": "玩家", "icon": "material-symbols:groups-outline", "order": 40, "routeKey": "players", "requiredPermissions": ["scum.players.read"], "instanceScope": {"required": true, "permission": "read"}},
+      {"key": "logs", "title": "日志", "icon": "material-symbols:article-outline", "order": 110, "routeKey": "logs", "requiredPermissions": ["scum.logs.read"], "instanceScope": {"required": true, "permission": "read"}},
+      {"key": "update", "title": "更新与重启", "icon": "material-symbols:upgrade-outline", "order": 130, "routeKey": "update", "requiredPermissions": ["scum.update.mutate", "scum.restart.mutate"], "instanceScope": {"required": true, "permission": "manage"}},
+      {"key": "tasks", "title": "任务", "icon": "material-symbols:task-alt-outline", "order": 140, "routeKey": "tasks", "requiredPermissions": ["scum.tasks.read"], "instanceScope": {"required": true, "permission": "read"}}
     ],
     "routes": [
-      {
-        "key": "settings",
-        "title": "SCUM 配置",
-        "path": "/settings",
-        "bundleEntry": "main",
-        "apiBasePath": "/api/plugins/scum-admin/settings",
-        "requiredPermissions": ["scum.config.read"],
-        "instanceScope": {
-          "required": true,
-          "permission": "read"
-        }
-      }
+      {"key": "settings", "title": "SCUM 配置", "path": "/settings", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/settings", "requiredPermissions": ["scum.config.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "migrated", "visibility": "normal"},
+      {"key": "database", "title": "数据库视图", "path": "/database", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/database/query", "requiredPermissions": ["scum.database.query"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin backend", "migrationStatus": "partial", "visibility": "direct", "unavailableReason": "数据库视图已作为玩家等业务页的数据来源，独立查询页暂不作为日常入口。"},
+      {"key": "players", "title": "玩家", "path": "/players", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/players", "requiredPermissions": ["scum.players.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "migrated", "visibility": "normal"},
+      {"key": "vehicles", "title": "载具", "path": "/vehicles", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/vehicles", "requiredPermissions": ["scum.vehicles.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "not_migrated", "visibility": "direct", "unavailableReason": "载具管理已记录在迁移矩阵中，当前批次暂不开放。"},
+      {"key": "territories", "title": "领地", "path": "/territories", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/territories", "requiredPermissions": ["scum.territories.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "not_migrated", "visibility": "direct", "unavailableReason": "领地和地图管理仍在迁移，地图资源由插件保留但入口暂不开放。"},
+      {"key": "locks", "title": "开锁", "path": "/locks", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/locks", "requiredPermissions": ["scum.locks.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "not_migrated", "visibility": "direct", "unavailableReason": "开锁工作流仍在迁移，当前仅展示不可用状态。"},
+      {"key": "gifts", "title": "礼包", "path": "/gifts", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/gifts", "requiredPermissions": ["scum.gifts.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "not_migrated", "visibility": "direct", "unavailableReason": "礼包管理需要完整发放和审计链路，当前批次暂不开放。"},
+      {"key": "events", "title": "事件", "path": "/events", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/events", "requiredPermissions": ["scum.events.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "not_migrated", "visibility": "direct", "unavailableReason": "事件管理仍在迁移，当前仅保留直接不可用页。"},
+      {"key": "economy", "title": "交易物品", "path": "/economy", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/economy/items", "requiredPermissions": ["scum.economy.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "not_migrated", "visibility": "direct", "unavailableReason": "交易物品资源已归插件所有，经济管理页暂未迁移。"},
+      {"key": "logs", "title": "日志", "path": "/logs", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/logs", "requiredPermissions": ["scum.logs.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "migrated", "visibility": "normal"},
+      {"key": "steam", "title": "Steam", "path": "/steam", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/steam/news", "requiredPermissions": ["scum.steam.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "deferred", "visibility": "direct", "unavailableReason": "Steam 新闻和版本面板已记录但不属于首批日常管理入口。"},
+      {"key": "update", "title": "更新与重启", "path": "/update", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/update/server", "requiredPermissions": ["scum.update.mutate", "scum.restart.mutate"], "instanceScope": {"required": true, "permission": "manage"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "migrated", "visibility": "normal"},
+      {"key": "tasks", "title": "任务", "path": "/tasks", "bundleEntry": "main", "apiBasePath": "/api/plugins/scum-admin/tasks", "requiredPermissions": ["scum.tasks.read"], "instanceScope": {"required": true, "permission": "read"}, "domainOwner": "plugins/scum-admin/frontend", "migrationStatus": "migrated", "visibility": "normal"}
     ]
+  },
+  "api": {
+    "routes": [
+      {"key": "settings-read", "method": "GET", "path": "/settings", "maxBodyBytes": 0, "requiredPermissions": ["scum.config.read"]},
+      {"key": "settings-patch", "method": "PATCH", "path": "/settings", "maxBodyBytes": 65536, "requiredPermissions": ["scum.config.patch"]},
+      {"key": "database-query", "method": "POST", "path": "/database/query", "maxBodyBytes": 65536, "requiredPermissions": ["scum.database.query"]},
+      {"key": "players-list", "method": "GET", "path": "/players", "maxBodyBytes": 0, "requiredPermissions": ["scum.players.read"]},
+      {"key": "players-action", "method": "POST", "path": "/players/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.players.mutate"]},
+      {"key": "vehicles-list", "method": "GET", "path": "/vehicles", "maxBodyBytes": 0, "requiredPermissions": ["scum.vehicles.read"]},
+      {"key": "vehicles-action", "method": "POST", "path": "/vehicles/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.vehicles.mutate"]},
+      {"key": "territories-list", "method": "GET", "path": "/territories", "maxBodyBytes": 0, "requiredPermissions": ["scum.territories.read"]},
+      {"key": "territories-action", "method": "POST", "path": "/territories/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.territories.mutate"]},
+      {"key": "locks-list", "method": "GET", "path": "/locks", "maxBodyBytes": 0, "requiredPermissions": ["scum.locks.read"]},
+      {"key": "locks-action", "method": "POST", "path": "/locks/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.locks.mutate"]},
+      {"key": "gifts-list", "method": "GET", "path": "/gifts", "maxBodyBytes": 0, "requiredPermissions": ["scum.gifts.read"]},
+      {"key": "gifts-action", "method": "POST", "path": "/gifts/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.gifts.mutate"]},
+      {"key": "events-list", "method": "GET", "path": "/events", "maxBodyBytes": 0, "requiredPermissions": ["scum.events.read"]},
+      {"key": "events-action", "method": "POST", "path": "/events/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.events.mutate"]},
+      {"key": "economy-items", "method": "GET", "path": "/economy/items", "maxBodyBytes": 0, "requiredPermissions": ["scum.economy.read"]},
+      {"key": "economy-action", "method": "POST", "path": "/economy/action", "maxBodyBytes": 65536, "requiredPermissions": ["scum.economy.mutate"]},
+      {"key": "logs-read", "method": "GET", "path": "/logs", "maxBodyBytes": 0, "requiredPermissions": ["scum.logs.read"]},
+      {"key": "steam-news", "method": "GET", "path": "/steam/news", "maxBodyBytes": 0, "requiredPermissions": ["scum.steam.read"]},
+      {"key": "update-install", "method": "POST", "path": "/update/install", "maxBodyBytes": 65536, "requiredPermissions": ["scum.update.mutate"]},
+      {"key": "update-server", "method": "POST", "path": "/update/server", "maxBodyBytes": 65536, "requiredPermissions": ["scum.update.mutate"]},
+      {"key": "server-restart", "method": "POST", "path": "/server/restart", "maxBodyBytes": 65536, "requiredPermissions": ["scum.restart.mutate"]},
+      {"key": "tasks-list", "method": "GET", "path": "/tasks", "maxBodyBytes": 0, "requiredPermissions": ["scum.tasks.read"]}
+    ],
+    "openapiSummary": "SCUM admin plugin API routes are exposed through the platform plugin API gateway and require declared plugin permissions."
   },
   "update": {
     "autoUpdatePolicy": "manual",
