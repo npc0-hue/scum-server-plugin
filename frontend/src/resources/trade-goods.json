@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "scum-admin.trade-goods.v1",
+  "source": "plugins/scum-admin/frontend",
+  "imageBasePath": "/assets/items/",
+  "categories": [
+    {"key": "currency", "title": "货币", "sampleItems": ["BP_Cash"]},
+    {"key": "vehicles", "title": "载具", "sampleItems": ["_spawnvehicle_BPC_Laika", "_SpawnVehicle_BPC_Tractor"]},
+    {"key": "weapons", "title": "武器", "sampleItems": ["_spawnitem_Weapon_AKM", "_spawnitem_Weapon_M16A4"]},
+    {"key": "medical", "title": "医疗", "sampleItems": ["_spawnItem_Antibiotics_01", "_spawnItem_Painkillers_01"]},
+    {"key": "resources", "title": "资源", "sampleItems": ["_spawnitem_Wooden_Log_01", "_spawnitem_Wire"]}
+  ],
+  "migrationNote": "Full item image corpus migrates from scum_new_web public/original and src/assets/original into plugin-owned artifact paths."
+}

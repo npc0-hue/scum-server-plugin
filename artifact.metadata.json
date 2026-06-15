@@ -1,0 +1,27 @@
+{
+  "artifacts": [
+    {
+      "kind": "runtime_image",
+      "sourceRef": "npc0/scum-admin-plugin:v0.1.8",
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "byteSize": 0,
+      "sha256": "",
+      "entryResource": "",
+      "sourceSummary": "SCUM admin runtime image",
+      "toolkitVersion": "0.1.0",
+      "ruleVersion": "plugin-authoring-rules.v1"
+    },
+    {
+      "kind": "image_frontend",
+      "sourceRef": "npc0/scum-admin-plugin:v0.1.8",
+      "mediaType": "application/vnd.scum.plugin.image-frontend.v1+json",
+      "byteSize": 0,
+      "sha256": "",
+      "entryResource": "index.html",
+      "frontendRoot": "/app/frontend/dist",
+      "sourceSummary": "SCUM admin frontend extracted from version image",
+      "toolkitVersion": "0.1.0",
+      "ruleVersion": "plugin-authoring-rules.v1"
+    }
+  ]
+}

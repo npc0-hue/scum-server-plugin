@@ -1,0 +1,38 @@
+{
+  "source": "plugins/scum-admin/frontend",
+  "legacySource": "scum_new_web read-only migration reference",
+  "itemImages": {
+    "root": "/assets/items/",
+    "ownedBy": "scum-admin",
+    "count": 2100,
+    "samples": [
+      "_spawnitem_WW_Body_Right.webp",
+      "_spawnitem_Military_Shirt_02.webp",
+      "_spawnitem_Bundle_Of_Lockpicks.webp"
+    ]
+  },
+  "mapTiles": {
+    "root": "/assets/maps/",
+    "ownedBy": "scum-admin",
+    "count": 5461,
+    "samples": [
+      "0/0/0.jpg",
+      "6/61/63.jpg",
+      "6/61/62.jpg"
+    ]
+  },
+  "icons": {
+    "root": "/assets/icons/",
+    "ownedBy": "scum-admin",
+    "samples": [
+      "scum-admin-domain.svg"
+    ]
+  },
+  "schemas": [
+    "resources/config-schema.json"
+  ],
+  "businessConstants": [
+    "resources/domainCatalog.ts",
+    "resources/trade-goods.json"
+  ]
+}

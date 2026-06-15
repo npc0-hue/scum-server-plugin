@@ -1,0 +1,189 @@
+{
+  "pluginId": "scum-admin",
+  "pluginVersion": "0.1.8",
+  "bundle": {
+    "url": "/plugin-assets/scum-admin/0.1.8/index.html",
+    "entry": "main"
+  },
+  "assetRoots": [
+    "/plugin-assets/scum-admin/0.1.8/assets/"
+  ],
+  "artifact": {
+    "mediaType": "text/html+vite",
+    "entryResource": "index.html",
+    "digestAlgorithm": "sha256",
+    "digest": "162bda8812fc0a51980887754f42a74eae5f769296bc019d41011c5fb5f96f58",
+    "sourceSummary": "SCUM-owned management routes, config schema, trade-goods constants, item-image roots, and map-tile roots live under plugins/scum-admin/frontend."
+  },
+  "bridge": {
+    "minBridgeVersion": "1.0.0",
+    "maxBridgeVersion": "1.0.0",
+    "minSdkVersion": "0.1.0",
+    "maxSdkVersion": "0.1.0",
+    "allowedMessageTypes": [
+      "plugin.handshake",
+      "plugin.ready",
+      "plugin.error",
+      "plugin.height",
+      "plugin.navigate",
+      "plugin.api.request"
+    ],
+    "sandbox": {
+      "flags": [
+        "allow-scripts",
+        "allow-forms",
+        "allow-same-origin"
+      ]
+    },
+    "apiProxy": {
+      "enabled": true,
+      "allowedMethods": [
+        "GET",
+        "PATCH",
+        "POST"
+      ],
+      "maxBodyBytes": 65536,
+      "maxResponseBytes": 65536
+    }
+  },
+  "ownedSurfaces": [
+    "settings",
+    "database",
+    "players",
+    "vehicles",
+    "territories",
+    "locks",
+    "gifts",
+    "events",
+    "economy",
+    "logs",
+    "steam",
+    "update",
+    "tasks"
+  ],
+  "routes": [
+    {
+      "key": "settings",
+      "path": "/settings",
+      "entry": "main",
+      "apiPath": "settings"
+    },
+    {
+      "key": "database",
+      "path": "/database",
+      "entry": "main",
+      "apiPath": "database/query"
+    },
+    {
+      "key": "players",
+      "path": "/players",
+      "entry": "main",
+      "apiPath": "players"
+    },
+    {
+      "key": "vehicles",
+      "path": "/vehicles",
+      "entry": "main",
+      "apiPath": "vehicles"
+    },
+    {
+      "key": "territories",
+      "path": "/territories",
+      "entry": "main",
+      "apiPath": "territories"
+    },
+    {
+      "key": "locks",
+      "path": "/locks",
+      "entry": "main",
+      "apiPath": "locks"
+    },
+    {
+      "key": "gifts",
+      "path": "/gifts",
+      "entry": "main",
+      "apiPath": "gifts"
+    },
+    {
+      "key": "events",
+      "path": "/events",
+      "entry": "main",
+      "apiPath": "events"
+    },
+    {
+      "key": "economy",
+      "path": "/economy",
+      "entry": "main",
+      "apiPath": "economy/items"
+    },
+    {
+      "key": "logs",
+      "path": "/logs",
+      "entry": "main",
+      "apiPath": "logs"
+    },
+    {
+      "key": "steam",
+      "path": "/steam",
+      "entry": "main",
+      "apiPath": "steam/news"
+    },
+    {
+      "key": "update",
+      "path": "/update",
+      "entry": "main",
+      "apiPath": "update/server"
+    },
+    {
+      "key": "tasks",
+      "path": "/tasks",
+      "entry": "main",
+      "apiPath": "tasks"
+    }
+  ],
+  "resourceSummary": {
+    "configSchemas": {
+      "ownedBy": "scum-admin",
+      "paths": [
+        "src/resources/config-schema.json"
+      ]
+    },
+    "businessConstants": {
+      "ownedBy": "scum-admin",
+      "paths": [
+        "src/resources/domainCatalog.ts",
+        "src/resources/trade-goods.json",
+        "src/resources/asset-index.json"
+      ]
+    },
+    "itemImages": {
+      "ownedBy": "scum-admin",
+      "path": "public/assets/items/",
+      "count": 2100,
+      "sampleResources": [
+        "_spawnitem_WW_Body_Right.webp",
+        "_spawnitem_Military_Shirt_02.webp",
+        "Small_Oxygen_Bottle_01_11zon.jpeg"
+      ],
+      "migrationSource": "scum_new_web/public/original and scum_new_web/src/assets/original"
+    },
+    "mapTiles": {
+      "ownedBy": "scum-admin",
+      "path": "public/assets/maps/",
+      "count": 5461,
+      "sampleResources": [
+        "0/0/0.jpg",
+        "6/61/63.jpg",
+        "6/61/62.jpg"
+      ],
+      "migrationSource": "scum_new_web/public/tiles"
+    },
+    "icons": {
+      "ownedBy": "scum-admin",
+      "path": "public/assets/icons/",
+      "sampleResources": [
+        "scum-admin-domain.svg"
+      ]
+    }
+  }
+}

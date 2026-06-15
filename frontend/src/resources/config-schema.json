@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "scum-admin.config.v1",
+  "source": "plugins/scum-admin/frontend",
+  "settingsPath": "SCUM/Saved/Config/WindowsServer/ServerSettings.ini",
+  "sections": [
+    {
+      "name": "SCUM.Server",
+      "fields": [
+        {"key": "ServerName", "type": "string", "maxLength": 128, "sensitive": false},
+        {"key": "MaxPlayers", "type": "integer", "minimum": 1, "maximum": 256, "sensitive": false},
+        {"key": "ServerPassword", "type": "string", "maxLength": 128, "sensitive": true},
+        {"key": "AdminPassword", "type": "string", "maxLength": 128, "sensitive": true},
+        {"key": "AllowFirstPerson", "type": "boolean", "sensitive": false},
+        {"key": "AllowThirdPerson", "type": "boolean", "sensitive": false},
+        {"key": "EnableBattleye", "type": "boolean", "sensitive": false},
+        {"key": "EnableVAC", "type": "boolean", "sensitive": false}
+      ]
+    }
+  ]
+}

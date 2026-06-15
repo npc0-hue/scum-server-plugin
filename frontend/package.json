@@ -1,0 +1,20 @@
+{
+  "name": "scum-admin-plugin-frontend",
+  "version": "0.1.8",
+  "private": true,
+  "type": "module",
+  "description": "SCUM-owned frontend bundle and resources for the scum-admin plugin.",
+  "scripts": {
+    "build": "vite build",
+    "test": "node src/__tests__/domainCatalog.test.mjs",
+    "typecheck": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
+    "vue": "^3.5.25",
+    "vue-tsc": "^2.2.12"
+  },
+  "devDependencies": {}
+}
