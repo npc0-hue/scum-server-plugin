@@ -8,7 +8,19 @@ import (
 	"scum_admin_plugin/internal/scumconfig"
 	"scum_admin_plugin/internal/scumdb"
 	"scum_admin_plugin/internal/scumdomain"
+	"scum_admin_plugin/internal/scumfiles"
 )
+
+type domainSourceSummary struct {
+	// Kind 是当前结果的执行端来源类型，例如 scum_run。
+	Kind string `json:"kind"`
+	// Mode 表示该来源是主执行端还是回退执行端。
+	Mode string `json:"mode"`
+	// Summary 是给前端展示的脱敏来源摘要。
+	Summary string `json:"summary"`
+	// Fallback 是声明的可选补充来源；为空表示当前仅支持单一来源。
+	Fallback string `json:"fallback,omitempty"`
+}
 
 // CapabilityPlanResponse 表示插件请求 core 执行受控能力后的计划响应。
 type CapabilityPlanResponse struct {
@@ -113,6 +125,8 @@ func (h Handler) Handle(command APICommand) APICommandResponse {
 		return h.handleSettingsRead(command)
 	case command.Method == http.MethodPatch && route == "settings":
 		return h.handleSettingsPatch(command)
+	case command.Method == http.MethodGet && route == "logs":
+		return h.handleLogsRead(command)
 	case command.Method == http.MethodPost && route == "database/query":
 		return h.handleDatabaseQuery(command)
 	default:
@@ -120,29 +134,32 @@ func (h Handler) Handle(command APICommand) APICommandResponse {
 	}
 }
 
-// handleSettingsRead creates a business response plus a core file.read dispatch plan for ServerSettings.ini.
+// handleSettingsRead returns plugin-owned configuration workspace metadata for frontend-driven file browsing.
 // command contains the instance context from the gateway, and the method returns a domain envelope or a stable missing-instance error.
 func (h Handler) handleSettingsRead(command APICommand) APICommandResponse {
 	instanceID := commandInstanceID(command)
 	if instanceID == "" {
 		return pluginError(command, http.StatusBadRequest, "missing_instance", "server instance context is required", nil)
 	}
-	plan := CapabilityPlanResponse{
-		Capability: "file.read",
-		Operation:  "read",
-		Payload: map[string]any{
-			"serverInstanceId": instanceID,
-			"path":             scumconfig.SettingsPath,
-		},
+	body := domainResult(command, "settings", "settings", "SCUM 配置", "读取实例配置目录中的真实文件，并支持完整的 SCUM 常用配置文件集合。", instanceID, "scum.config.read", "file.read", map[string]any{
+		"workspaces":       scumfiles.ConfigWorkspaces(),
+		"supportedFiles":   scumfiles.SupportedConfigFiles(),
+		"structuredFields": scumconfig.FieldDefinitions(),
+		"structuredPath":   scumconfig.SettingsPath,
+	}, nil)
+	return jsonResponse(command, http.StatusOK, body)
+}
+
+// handleLogsRead returns plugin-owned log workspace metadata for frontend-driven file browsing.
+// command contains the instance context from the gateway, and the method returns a domain envelope or a stable missing-instance error.
+func (h Handler) handleLogsRead(command APICommand) APICommandResponse {
+	instanceID := commandInstanceID(command)
+	if instanceID == "" {
+		return pluginError(command, http.StatusBadRequest, "missing_instance", "server instance context is required", nil)
 	}
-	body := domainResult(command, "settings", "settings", "SCUM 配置", "读取 ServerSettings.ini 配置文件。", instanceID, "scum.config.read", "file.read", map[string]any{
-		"fields": []map[string]any{
-			{"section": "SCUM.Server", "key": "MaxPlayers", "label": "最大玩家数", "value": "", "validator": "1-128"},
-			{"section": "SCUM.Server", "key": "ServerName", "label": "服务器名称", "value": "", "validator": "1-80 字符"},
-			{"section": "SCUM.Game", "key": "TimeOfDaySpeed", "label": "时间流速", "value": "", "validator": "0.1-24"},
-		},
-		"checksum": "",
-	}, &plan)
+	body := domainResult(command, "logs", "logs", "日志", "读取实例日志目录中的真实文件，并优先展示常见 SCUM 游戏日志。", instanceID, "scum.logs.read", "file.read", map[string]any{
+		"workspaces": scumfiles.LogWorkspaces(),
+	}, nil)
 	return jsonResponse(command, http.StatusOK, body)
 }
 
@@ -233,6 +250,7 @@ func (h Handler) handleDomainPlan(command APICommand, route string) APICommandRe
 		return jsonResponse(command, http.StatusAccepted, body)
 	}
 	body := domainUnavailable(command, spec.Route, spec.Domain, spec.Title, spec.Summary, plan.ServerInstanceID, spec.Permission, spec.Capability, "capability_execution_unavailable", "该工作流需要 core 能力执行结果，当前返回稳定不可用状态。", &planResponse)
+	body.Data = readRoutePlaceholder(spec, plan)
 	if spec.Route == "tasks" {
 		body.State = "available"
 		body.Kind = "domain_result"
@@ -240,6 +258,37 @@ func (h Handler) handleDomainPlan(command APICommand, route string) APICommandRe
 		body.Data = map[string]any{"tasks": []map[string]any{}}
 	}
 	return jsonResponse(command, http.StatusOK, body)
+}
+
+// readRoutePlaceholder builds stable placeholder metadata for read routes before core hydration executes the query.
+// spec describes the SCUM route, plan contains the scoped capability plan, and the function returns a renderable placeholder payload.
+func readRoutePlaceholder(spec scumdomain.RouteSpec, plan scumdomain.CapabilityPlan) map[string]any {
+	source := domainSourceSummary{
+		Kind:    firstNonEmpty(strings.TrimSpace(plan.SourceStrategy.Primary), "scum_run"),
+		Mode:    "primary",
+		Summary: firstNonEmpty(strings.TrimSpace(plan.SourceStrategy.Summary), "当前由 scum_run 提供结构化读结果。"),
+	}
+	if fallback := strings.TrimSpace(plan.SourceStrategy.Fallback); fallback != "" {
+		source.Fallback = fallback
+	}
+	placeholder := map[string]any{
+		"items":   []map[string]any{},
+		"rows":    []map[string]any{},
+		"summary": plan.AuditSummary,
+		"source":  source,
+	}
+	if spec.Template != "" {
+		placeholder["template"] = spec.Template
+	}
+	switch spec.Route {
+	case "players":
+		placeholder["view"] = "table"
+	case "players/detail", "players/assets":
+		placeholder["view"] = "detail"
+	case "players/login-history", "players/duplicate-ip", "players/skills", "players/trajectory", "vehicles", "vehicles/detail", "territories", "squads", "locks", "locks/records":
+		placeholder["view"] = "list"
+	}
+	return placeholder
 }
 
 // domainResult builds a migrated read-route business response.
@@ -378,6 +427,17 @@ func decodeObjectBody(body []byte) (map[string]any, error) {
 // route is the raw suffix from core, and the function returns a slash-trimmed lowercase route.
 func normalizeRoute(route string) string {
 	return strings.Trim(strings.ToLower(strings.TrimSpace(route)), "/")
+}
+
+// firstNonEmpty returns the first trimmed non-empty value from a candidate list.
+// values contains candidate strings in priority order, and the function returns the first non-empty value or an empty string when none are set.
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // commandInstanceID returns the server instance ID attached to a gateway command.

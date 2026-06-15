@@ -9,22 +9,35 @@ import (
 )
 
 var supportedSettings = map[string]settingRule{
-	"scum.server:servername":       {kind: "string", maxLength: 128},
-	"scum.server:maxplayers":       {kind: "int", min: 1, max: 256},
-	"scum.server:serverpassword":   {kind: "string", maxLength: 128, sensitive: true},
-	"scum.server:adminpassword":    {kind: "string", maxLength: 128, sensitive: true},
-	"scum.server:allowfirstperson": {kind: "bool"},
-	"scum.server:allowthirdperson": {kind: "bool"},
-	"scum.server:enablebattley":    {kind: "bool"},
-	"scum.server:enablevac":        {kind: "bool"},
+	"scum.server:servername":       {section: "SCUM.Server", key: "ServerName", kind: "string", maxLength: 128, label: "服务器名称", validator: "1-128 字符"},
+	"scum.server:maxplayers":       {section: "SCUM.Server", key: "MaxPlayers", kind: "int", min: 1, max: 256, label: "最大玩家数", validator: "1-256"},
+	"scum.server:serverpassword":   {section: "SCUM.Server", key: "ServerPassword", kind: "string", maxLength: 128, sensitive: true, label: "服务器密码", validator: "0-128 字符"},
+	"scum.server:adminpassword":    {section: "SCUM.Server", key: "AdminPassword", kind: "string", maxLength: 128, sensitive: true, label: "管理员密码", validator: "0-128 字符"},
+	"scum.server:allowfirstperson": {section: "SCUM.Server", key: "AllowFirstPerson", kind: "bool", label: "允许第一人称", validator: "true / false"},
+	"scum.server:allowthirdperson": {section: "SCUM.Server", key: "AllowThirdPerson", kind: "bool", label: "允许第三人称", validator: "true / false"},
+	"scum.server:enablebattley":    {section: "SCUM.Server", key: "EnableBattleye", kind: "bool", label: "启用 BattlEye", validator: "true / false"},
+	"scum.server:enablevac":        {section: "SCUM.Server", key: "EnableVAC", kind: "bool", label: "启用 VAC", validator: "true / false"},
 }
 
 type settingRule struct {
-	kind      string
-	min       int
-	max       int
+	// section 是配置项所在的 INI 分组名称。
+	section string
+	// key 是配置项在分组内的键名。
+	key string
+	// kind 是配置值类型，例如 string、int 或 bool。
+	kind string
+	// min 是整数类配置允许的最小值。
+	min int
+	// max 是整数类配置允许的最大值。
+	max int
+	// maxLength 是字符串类配置允许的最大字符数。
 	maxLength int
+	// sensitive 表示该配置项是否应按敏感值处理。
 	sensitive bool
+	// label 是前端展示使用的中文名称。
+	label string
+	// validator 是前端展示的校验规则摘要。
+	validator string
 }
 
 // Parse parses ServerSettings.ini content into ordered sections and entries.
@@ -161,6 +174,28 @@ func SupportedSettings() []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// FieldDefinitions returns the structured field metadata for plugin-owned settings surfaces.
+// It takes no parameters and returns stable field definitions ordered for frontend rendering.
+func FieldDefinitions() []FieldDefinition {
+	definitions := make([]FieldDefinition, 0, len(supportedSettings))
+	for _, rule := range supportedSettings {
+		definitions = append(definitions, FieldDefinition{
+			Section:   strings.TrimSpace(rule.section),
+			Key:       strings.TrimSpace(rule.key),
+			Label:     strings.TrimSpace(rule.label),
+			Validator: strings.TrimSpace(rule.validator),
+			Sensitive: rule.sensitive,
+		})
+	}
+	sort.Slice(definitions, func(left int, right int) bool {
+		if definitions[left].Section == definitions[right].Section {
+			return definitions[left].Key < definitions[right].Key
+		}
+		return definitions[left].Section < definitions[right].Section
+	})
+	return definitions
 }
 
 // validateValue checks one setting value against its rule.

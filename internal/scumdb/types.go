@@ -7,6 +7,10 @@ const DefaultDatabaseRef = "scum-main"
 type QueryRequest struct {
 	// ServerInstanceID 是目标服务器实例 ID。
 	ServerInstanceID string `json:"serverInstanceId"`
+	// EntityID 是读详情类模板使用的实体 ID，例如玩家、载具或锁具 ID。
+	EntityID string `json:"entityId,omitempty"`
+	// SubjectID 是读详情类模板使用的辅助主体 ID，例如玩家 user profile ID。
+	SubjectID string `json:"subjectId,omitempty"`
 	// Template 是可选的预定义查询模板键。
 	Template string `json:"template,omitempty"`
 	// SQL 是可选的临时只读 SQL；生产策略可禁用该字段。
@@ -15,6 +19,10 @@ type QueryRequest struct {
 	Args []any `json:"args,omitempty"`
 	// Limit 是调用方请求的最大返回行数。
 	Limit int `json:"limit,omitempty"`
+	// TimeRangeStart 是轨迹等时间范围查询的起始 Unix 秒。
+	TimeRangeStart int64 `json:"timeRangeStart,omitempty"`
+	// TimeRangeEnd 是轨迹等时间范围查询的结束 Unix 秒。
+	TimeRangeEnd int64 `json:"timeRangeEnd,omitempty"`
 }
 
 // QueryPlan 表示通过验证后的 SCUM.db 查询计划。

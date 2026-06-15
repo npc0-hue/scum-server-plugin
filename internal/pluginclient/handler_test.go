@@ -3,14 +3,16 @@ package pluginclient
 import (
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"scum_admin_plugin/internal/scumdomain"
+	"scum_admin_plugin/internal/scumfiles"
 )
 
-// TestHandlerBuildsSettingsReadPlan verifies GET settings returns a domain envelope with a file.read dispatch plan.
-// t is the Go test handle, and the function fails the test when the route response is malformed or plan-only.
-func TestHandlerBuildsSettingsReadPlan(t *testing.T) {
+// TestHandlerBuildsSettingsReadMetadata verifies GET settings returns plugin-owned workspace metadata.
+// t is the Go test handle, and the function fails the test when the route response is malformed or missing workspace data.
+func TestHandlerBuildsSettingsReadMetadata(t *testing.T) {
 	handler := NewHandler(false)
 	response := handler.Handle(command(http.MethodGet, "/settings", nil))
 	if response.StatusCode != http.StatusOK {
@@ -20,11 +22,56 @@ func TestHandlerBuildsSettingsReadPlan(t *testing.T) {
 	if err := json.Unmarshal(response.Body, &envelope); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if envelope.Kind != "domain_result" || envelope.DispatchPlan == nil {
-		t.Fatalf("expected domain result with dispatch plan, got %+v", envelope)
+	if envelope.Kind != "domain_result" || envelope.DispatchPlan != nil {
+		t.Fatalf("expected domain result without dispatch plan, got %+v", envelope)
 	}
-	if envelope.DispatchPlan.Capability != "file.read" || envelope.DispatchPlan.Operation != "read" {
-		t.Fatalf("unexpected dispatch plan: %+v", envelope.DispatchPlan)
+	data, ok := envelope.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected workspace metadata, got %+v", envelope.Data)
+	}
+	workspaces, ok := data["workspaces"].([]any)
+	if !ok || len(workspaces) == 0 {
+		t.Fatalf("expected settings workspaces, got %+v", data)
+	}
+	supportedFiles, ok := data["supportedFiles"].([]any)
+	if !ok {
+		t.Fatalf("expected supported config files, got %+v", data)
+	}
+	gotSupportedFiles := make([]string, 0, len(supportedFiles))
+	for _, item := range supportedFiles {
+		text, ok := item.(string)
+		if !ok {
+			t.Fatalf("expected string supported file, got %#v", item)
+		}
+		gotSupportedFiles = append(gotSupportedFiles, text)
+	}
+	if !reflect.DeepEqual(gotSupportedFiles, scumfiles.SupportedConfigFiles()) {
+		t.Fatalf("unexpected supported config files: got %+v want %+v", gotSupportedFiles, scumfiles.SupportedConfigFiles())
+	}
+}
+
+// TestHandlerBuildsLogsReadMetadata verifies GET logs returns plugin-owned workspace metadata.
+// t is the Go test handle, and the function fails the test when the route response is malformed or missing workspace data.
+func TestHandlerBuildsLogsReadMetadata(t *testing.T) {
+	handler := NewHandler(false)
+	response := handler.Handle(command(http.MethodGet, "/logs", nil))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected ok response, got %+v", response)
+	}
+	var envelope DomainAPIResponse
+	if err := json.Unmarshal(response.Body, &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.Kind != "domain_result" || envelope.DispatchPlan != nil {
+		t.Fatalf("expected domain result without dispatch plan, got %+v", envelope)
+	}
+	data, ok := envelope.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected workspace metadata, got %+v", envelope.Data)
+	}
+	workspaces, ok := data["workspaces"].([]any)
+	if !ok || len(workspaces) == 0 {
+		t.Fatalf("expected log workspaces, got %+v", data)
 	}
 }
 
@@ -52,6 +99,51 @@ func TestHandlerBuildsDomainReadPlan(t *testing.T) {
 	}
 	if payload["permission"] != "scum.players.read" || payload["domain"] != "players" {
 		t.Fatalf("unexpected domain payload: %+v", payload)
+	}
+	data, ok := envelope.Data.(map[string]any)
+	if !ok {
+		t.Fatalf("expected data placeholder, got %+v", envelope.Data)
+	}
+	source, ok := data["source"].(map[string]any)
+	if !ok || source["kind"] != "scum_run" || source["mode"] != "primary" {
+		t.Fatalf("unexpected source placeholder: %+v", data)
+	}
+	if _, ok := source["fallback"]; ok {
+		t.Fatalf("expected single-source route metadata without fallback, got %+v", data)
+	}
+}
+
+// TestHandlerBuildsPlayerDetailPlan verifies structured player detail reads expose a query plan and source summary.
+// t is the Go test handle, and the function fails the test when detail reads lack stable placeholder metadata.
+func TestHandlerBuildsPlayerDetailPlan(t *testing.T) {
+	handler := NewHandler(false)
+	response := handler.Handle(commandWithQuery(http.MethodGet, "/players/detail", nil, map[string][]string{"entityId": {"12"}}))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected ok response, got %+v", response)
+	}
+	var envelope DomainAPIResponse
+	if err := json.Unmarshal(response.Body, &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if envelope.DispatchPlan == nil || envelope.DispatchPlan.Capability != "db.query" {
+		t.Fatalf("expected db.query dispatch, got %+v", envelope)
+	}
+	payloadBytes, _ := json.Marshal(envelope.DispatchPlan.Payload)
+	var payload scumdomain.CapabilityPlan
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		t.Fatalf("decode domain plan: %v", err)
+	}
+	queryPlan, ok := payload.Payload["queryPlan"].(map[string]any)
+	if !ok || queryPlan["template"] != "players.detail" {
+		t.Fatalf("unexpected query plan: %+v", payload.Payload)
+	}
+	data, ok := envelope.Data.(map[string]any)
+	if !ok || data["view"] != "detail" {
+		t.Fatalf("unexpected placeholder data: %+v", envelope.Data)
+	}
+	source, ok := data["source"].(map[string]any)
+	if !ok || source["fallback"] != nil {
+		t.Fatalf("expected detail route to stay database-only, got %+v", data)
 	}
 }
 
@@ -139,4 +231,12 @@ func command(method string, route string, body []byte) APICommand {
 		Body:        body,
 		Instance:    &APIInstanceContext{ServerInstanceID: "si-1", RequiredPermission: "read"},
 	}
+}
+
+// commandWithQuery builds a plugin API command with query parameters for handler tests.
+// method and route define the gateway request, body is the JSON request payload, query contains URL params, and the function returns a command with instance context.
+func commandWithQuery(method string, route string, body []byte, query map[string][]string) APICommand {
+	cmd := command(method, route, body)
+	cmd.Query = query
+	return cmd
 }

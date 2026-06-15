@@ -25,6 +25,20 @@ type Entry struct {
 	Value string `json:"value"`
 }
 
+// FieldDefinition 表示前端可展示的结构化配置字段定义。
+type FieldDefinition struct {
+	// Section 是字段所属的配置分组名称。
+	Section string `json:"section"`
+	// Key 是字段对应的配置键名称。
+	Key string `json:"key"`
+	// Label 是前端展示使用的中文标签。
+	Label string `json:"label"`
+	// Validator 是给前端展示的校验规则摘要。
+	Validator string `json:"validator"`
+	// Sensitive 表示该字段是否包含敏感值。
+	Sensitive bool `json:"sensitive"`
+}
+
 // ReadRequest 表示 SCUM 配置读取命令请求。
 type ReadRequest struct {
 	// ServerInstanceID 是目标服务器实例 ID。

@@ -8,6 +8,8 @@ RUN go build -o /out/scum-admin-plugin ./cmd/scum-admin-plugin
 FROM alpine:3.20
 RUN adduser -D -H scumplugin
 COPY --from=build /out/scum-admin-plugin /usr/local/bin/scum-admin-plugin
+COPY plugins/scum-admin/manifest.json /app/plugin/manifest.json
+COPY plugins/scum-admin/artifact.metadata.json /app/plugin/artifact.metadata.json
 COPY plugins/scum-admin/frontend/dist /app/frontend/dist
 USER scumplugin
 ENTRYPOINT ["/usr/local/bin/scum-admin-plugin"]
