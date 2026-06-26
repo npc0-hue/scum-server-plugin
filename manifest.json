@@ -2,14 +2,14 @@
   "schemaVersion": "scum-plugin.v1",
   "pluginId": "scum-admin",
   "name": "SCUM Admin",
-  "version": "0.1.8",
+  "version": "0.1.13",
   "channel": "stable",
   "compatibility": {
     "minScumServerVersion": "1.0.0",
     "maxScumServerVersion": "2.0.0"
   },
   "runtime": {
-    "image": "npc0/scum-admin-plugin:v0.1.8",
+    "image": "npc0/scum-admin-plugin:v0.1.13",
     "internalPorts": [],
     "exposedPorts": [],
     "portMappings": [],
@@ -228,10 +228,10 @@
   ],
   "frontend": {
     "bundle": {
-      "url": "/plugin-assets/scum-admin/0.1.8/index.html",
+      "url": "/plugin-assets/scum-admin/0.1.13/index.html",
       "entry": "main",
       "pluginId": "scum-admin",
-      "pluginVersion": "0.1.8"
+      "pluginVersion": "0.1.13"
     },
     "compatibility": {
       "minWebShellVersion": "1.0.0",
@@ -266,7 +266,7 @@
           "POST"
         ],
         "maxBodyBytes": 65536,
-        "maxResponseBytes": 65536
+        "maxResponseBytes": 1048576
       },
       "contextFields": [
         "pluginId",

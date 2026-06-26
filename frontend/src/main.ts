@@ -1,6 +1,9 @@
 import { ScumPluginBridge, type BridgeContext } from './bridge'
 import { domainRoutes, normalToolRoutes, routeFor, type DomainRoute } from './resources/domainCatalog'
 
+const scumAdminPluginID = 'scum-admin'
+const scumAdminFallbackPluginVersion = '0.1.13'
+
 type PluginEnvelope = {
   kind?: 'domain_result' | 'operation_handle' | 'unavailable'
   state?: 'loading' | 'available' | 'empty' | 'denied' | 'unavailable' | 'not_migrated' | 'deferred' | 'pending_dispatch' | 'failed'
@@ -22,6 +25,10 @@ type PluginEnvelope = {
   }
 }
 
+type PluginAPIError = Error & {
+  code?: string
+}
+
 type SourceSummary = {
   kind?: string
   mode?: string
@@ -35,6 +42,21 @@ type RenderState = {
   content: HTMLElement
   status: HTMLElement
   nav: HTMLElement
+  settingsViewMode: 'structured' | 'raw'
+  settingsModeTouched: boolean
+}
+
+const pluginVersionFromAssetURL = (locationHref: string) => {
+  try {
+    const segments = new URL(locationHref).pathname.split('/').filter(Boolean)
+    const namespaceIndex = segments.findIndex((segment) => segment === 'plugin-assets')
+    if (namespaceIndex >= 0 && segments[namespaceIndex + 1] === scumAdminPluginID && segments[namespaceIndex + 2]) {
+      return decodeURIComponent(segments[namespaceIndex + 2])
+    }
+  } catch {
+    // Non-browser or malformed URLs should fall back to the packaged plugin version.
+  }
+  return scumAdminFallbackPluginVersion
 }
 
 type ConfigWorkspace = {
@@ -64,6 +86,7 @@ type StructuredField = {
 
 type ResolvedStructuredField = StructuredField & {
   value: string
+  editable?: boolean
 }
 
 type FileListEntry = {
@@ -141,12 +164,49 @@ const pluginSkin = `
     --plugin-control: var(--plugin-theme-control-bg-color, rgba(16, 16, 20, 0.78));
     --plugin-control-focus: var(--plugin-theme-control-focus-bg-color, rgba(16, 16, 20, 0.92));
     --plugin-shadow: 0 20px 48px rgba(0, 0, 0, 0.22);
-    min-height: 100vh;
-    padding: 16px;
+    --plugin-shadow-soft: 0 16px 36px rgba(0, 0, 0, 0.16);
+    --plugin-workspace-bg-image: none;
+    min-height: 100%;
+    padding: 24px;
     color: var(--plugin-text);
     background: transparent;
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     letter-spacing: 0;
+    position: relative;
+  }
+
+  .scum-admin-plugin::before {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    content: "";
+    z-index: 0;
+    opacity: 0;
+    background-image: var(--plugin-workspace-bg-image);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: cover;
+    transition: opacity 0.2s ease;
+  }
+
+  .scum-admin-plugin.has-backdrop::before {
+    opacity: 1;
+  }
+
+  .scum-admin-plugin > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .scum-admin-plugin::after {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    content: "";
+    z-index: 0;
+    background:
+      linear-gradient(180deg, rgba(5, 7, 12, 0.38), rgba(5, 7, 12, 0.58)),
+      linear-gradient(135deg, color-mix(in srgb, var(--plugin-primary) 20%, transparent), transparent 42%, color-mix(in srgb, var(--plugin-info) 14%, transparent));
   }
 
   .scum-admin-header {
@@ -154,15 +214,26 @@ const pluginSkin = `
     justify-content: space-between;
     gap: 16px;
     align-items: flex-start;
-    padding: 0 0 16px;
-    border-bottom: 1px solid var(--plugin-border);
+    padding: 18px 20px;
+    border: 1px solid var(--plugin-border-strong);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.03)),
+      color-mix(in srgb, var(--plugin-panel-strong) 88%, transparent);
+    backdrop-filter: blur(22px) saturate(1.22);
+    -webkit-backdrop-filter: blur(22px) saturate(1.22);
+    box-shadow: var(--plugin-shadow-soft);
   }
 
   .scum-admin-header h1 {
     margin: 0;
     color: var(--plugin-text-strong);
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 720;
+  }
+
+  .scum-admin-header p {
+    max-width: 760px;
   }
 
   .scum-admin-status {
@@ -175,14 +246,22 @@ const pluginSkin = `
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    margin: 16px 0;
+    margin: 18px 0;
+    padding: 6px;
+    border: 1px solid var(--plugin-border);
+    border-radius: 16px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+      color-mix(in srgb, var(--plugin-panel) 88%, transparent);
+    backdrop-filter: blur(18px) saturate(1.18);
+    -webkit-backdrop-filter: blur(18px) saturate(1.18);
   }
 
   .scum-admin-tabs button {
-    min-height: 34px;
-    padding: 7px 11px;
+    min-height: 38px;
+    padding: 8px 12px;
     border: 1px solid var(--plugin-border);
-    border-radius: 6px;
+    border-radius: 12px;
     color: #d4d4d8;
     background: var(--plugin-control);
     cursor: pointer;
@@ -208,15 +287,28 @@ const pluginSkin = `
   }
 
   .route-surface {
-    padding: 16px;
-    border: 1px solid var(--plugin-border);
-    border-radius: 6px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .route-shell {
+    display: grid;
+    gap: 18px;
+    padding: 22px;
+    border: 1px solid var(--plugin-border-strong);
+    border-radius: 24px;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.025)),
-      var(--plugin-panel-strong);
-    backdrop-filter: blur(18px) saturate(1.25);
-    -webkit-backdrop-filter: blur(18px) saturate(1.25);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), var(--plugin-shadow);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.025)),
+      color-mix(in srgb, var(--plugin-panel-strong) 90%, transparent);
+    backdrop-filter: blur(22px) saturate(1.2);
+    -webkit-backdrop-filter: blur(22px) saturate(1.2);
+    box-shadow: var(--plugin-shadow);
+  }
+
+  .surface-body {
+    display: grid;
+    gap: 16px;
   }
 
   .surface-title {
@@ -224,13 +316,17 @@ const pluginSkin = `
     justify-content: space-between;
     gap: 12px;
     align-items: flex-start;
-    margin-bottom: 14px;
+  }
+
+  .surface-title > div {
+    display: grid;
+    gap: 8px;
   }
 
   .surface-title h2 {
     margin: 0;
     color: var(--plugin-text-strong);
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
   }
 
@@ -251,6 +347,23 @@ const pluginSkin = `
     background: var(--plugin-panel-soft);
     font-size: 12px;
     white-space: nowrap;
+  }
+
+  .surface-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--plugin-muted);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .surface-eyebrow::before {
+    width: 28px;
+    height: 1px;
+    background: color-mix(in srgb, var(--plugin-primary) 54%, transparent);
+    content: "";
   }
 
   .status-pill[data-tone="ok"] {
@@ -276,7 +389,13 @@ const pluginSkin = `
     gap: 10px;
     flex-wrap: wrap;
     align-items: center;
-    margin: 12px 0;
+    margin: 0;
+  }
+
+  .controls-stack {
+    display: grid;
+    gap: 10px;
+    align-items: stretch;
   }
 
   .controls input,
@@ -344,13 +463,18 @@ const pluginSkin = `
   }
 
   .notice {
-    margin: 10px 0;
-    padding: 10px;
+    margin: 0;
+    padding: 12px 14px;
     border: 1px solid rgba(255, 176, 32, 0.45);
-    border-radius: 6px;
+    border-radius: 12px;
     color: #ffd37a;
     background: rgba(255, 176, 32, 0.1);
     line-height: 1.5;
+  }
+
+  .notice.compact {
+    padding: 10px 12px;
+    font-size: 13px;
   }
 
   .notice p {
@@ -367,7 +491,11 @@ const pluginSkin = `
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: 10px;
-    margin: 12px 0;
+    margin: 0;
+  }
+
+  .meta-grid--compact {
+    grid-template-columns: 1fr;
   }
 
   .meta-item {
@@ -391,18 +519,91 @@ const pluginSkin = `
     word-break: break-word;
   }
 
+  .workspace-grid {
+    display: grid;
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .workspace-sidebar,
+  .workspace-main {
+    display: grid;
+    gap: 16px;
+  }
+
+  .workspace-card {
+    display: grid;
+    gap: 14px;
+    padding: 18px;
+    border: 1px solid var(--plugin-border-strong);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.025)),
+      color-mix(in srgb, var(--plugin-panel) 90%, transparent);
+    backdrop-filter: blur(18px) saturate(1.16);
+    -webkit-backdrop-filter: blur(18px) saturate(1.16);
+    box-shadow: var(--plugin-shadow-soft);
+  }
+
+  .workspace-card--primary {
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--plugin-primary) 16%, rgba(255, 255, 255, 0.08)), rgba(255, 255, 255, 0.025)),
+      color-mix(in srgb, var(--plugin-panel) 90%, transparent);
+  }
+
+  .workspace-card-heading {
+    display: grid;
+    gap: 8px;
+  }
+
+  .workspace-card-heading strong {
+    color: var(--plugin-text-strong);
+    font-size: 18px;
+  }
+
+  .workspace-card-heading p {
+    margin: 0;
+    color: var(--plugin-muted);
+    line-height: 1.6;
+  }
+
+  .workspace-card-heading .surface-eyebrow {
+    letter-spacing: 0.12em;
+  }
+
+  .workspace-hint {
+    display: grid;
+    gap: 8px;
+    color: var(--plugin-muted);
+    line-height: 1.55;
+  }
+
+  .workspace-hint strong {
+    color: var(--plugin-text-strong);
+    font-size: 14px;
+  }
+
   .field-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 10px;
-    margin: 12px 0;
+    margin: 0;
   }
 
   .field-grid label {
     display: grid;
     gap: 6px;
     min-width: 0;
+    padding: 10px;
+    border: 1px solid var(--plugin-border);
+    border-radius: 6px;
     color: var(--plugin-muted);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+      var(--plugin-panel);
+    backdrop-filter: blur(16px) saturate(1.18);
+    -webkit-backdrop-filter: blur(16px) saturate(1.18);
   }
 
   .field-grid strong {
@@ -412,6 +613,141 @@ const pluginSkin = `
 
   .field-grid span {
     color: var(--plugin-muted);
+    font-size: 12px;
+  }
+
+  .settings-editor {
+    display: grid;
+    gap: 10px;
+    margin-top: 0;
+    padding: 18px;
+    border: 1px solid var(--plugin-border-strong);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025)),
+      var(--plugin-panel);
+    backdrop-filter: blur(18px) saturate(1.2);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    box-shadow: var(--plugin-shadow);
+  }
+
+  .settings-editor-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .settings-editor-header strong {
+    color: var(--plugin-text-strong);
+  }
+
+  .settings-editor-header p {
+    margin: 6px 0 0;
+    color: var(--plugin-muted);
+    font-size: 13px;
+  }
+
+  .settings-editor textarea {
+    width: 100%;
+    min-height: clamp(360px, 58vh, 760px);
+    resize: vertical;
+    padding: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    color: #dbeafe;
+    background: rgba(6, 10, 20, 0.92);
+    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    outline: none;
+    white-space: pre;
+  }
+
+  .settings-editor textarea:focus {
+    border-color: var(--plugin-primary);
+  }
+
+  .settings-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .settings-mode {
+    display: inline-flex;
+    gap: 6px;
+    padding: 4px;
+    width: fit-content;
+    border: 1px solid var(--plugin-border);
+    border-radius: 999px;
+    background: rgba(10, 14, 22, 0.38);
+    backdrop-filter: blur(14px) saturate(1.15);
+    -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  }
+
+  .settings-mode button {
+    min-height: 30px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 999px;
+    color: var(--plugin-muted);
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .settings-mode button[aria-pressed="true"] {
+    color: #ffffff;
+    background: color-mix(in srgb, var(--plugin-primary) 18%, rgba(255, 255, 255, 0.08));
+  }
+
+  .settings-mode button:hover {
+    color: #ffffff;
+  }
+
+  .settings-save-status {
+    color: var(--plugin-muted);
+    font-size: 13px;
+  }
+
+  .settings-frame {
+    display: grid;
+    gap: 16px;
+  }
+
+  .settings-structured-panel {
+    display: grid;
+    gap: 14px;
+  }
+
+  .settings-structured-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .settings-structured-header p {
+    margin: 6px 0 0;
+    color: var(--plugin-muted);
+    line-height: 1.55;
+  }
+
+  .settings-structured-header strong {
+    color: var(--plugin-text-strong);
+    font-size: 17px;
+  }
+
+  .settings-file-mark {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 10px;
+    border: 1px solid var(--plugin-border);
+    border-radius: 999px;
+    color: var(--plugin-muted);
+    background: rgba(255, 255, 255, 0.05);
     font-size: 12px;
   }
 
@@ -456,10 +792,15 @@ const pluginSkin = `
   .empty {
     padding: 18px;
     border: 1px dashed rgba(255, 255, 255, 0.16);
-    border-radius: 6px;
+    border-radius: 12px;
     color: var(--plugin-muted);
     background: rgba(255, 255, 255, 0.025);
     text-align: center;
+  }
+
+  .empty.inline {
+    padding: 14px;
+    text-align: left;
   }
 
   .task-list {
@@ -495,11 +836,15 @@ const pluginSkin = `
 
   @media (max-width: 700px) {
     .scum-admin-header,
-    .surface-title {
-      display: block;
+    .surface-title,
+    .settings-structured-header,
+    .settings-editor-header {
+      display: grid;
     }
 
-    .controls {
+    .controls,
+    .controls-stack,
+    .workspace-grid {
       display: grid;
     }
 
@@ -508,13 +853,18 @@ const pluginSkin = `
     .controls button {
       width: 100%;
     }
+
+    .scum-admin-plugin,
+    .route-shell {
+      padding: 16px;
+    }
   }
 `
 
 export const mount = async () => {
   const root = document.getElementById('scum-admin-plugin-root') || document.body
   const initialRoute = new URL(window.location.href).searchParams.get('routeKey') || 'settings'
-  const bridge = new ScumPluginBridge('scum-admin', '0.1.8', initialRoute)
+  const bridge = new ScumPluginBridge(scumAdminPluginID, pluginVersionFromAssetURL(window.location.href), initialRoute)
   const panel = document.createElement('main')
   panel.className = 'scum-admin-plugin'
   panel.innerHTML = `
@@ -531,7 +881,7 @@ export const mount = async () => {
     <section class="route-surface" data-role="content"></section>
   `
   root.appendChild(panel)
-  bridge.onContext((context) => applyPluginTheme(panel, context.themeTokens))
+  bridge.onContext((context) => applyPluginTheme(panel, context))
 
   const status = panel.querySelector<HTMLElement>('[data-role="status"]')
   const nav = panel.querySelector<HTMLElement>('[data-role="nav"]')
@@ -546,7 +896,9 @@ export const mount = async () => {
     route: routeFor(initialRoute),
     content,
     status,
-    nav
+    nav,
+    settingsViewMode: 'structured',
+    settingsModeTouched: false
   }
 
   renderNav(renderState)
@@ -568,15 +920,20 @@ export const mount = async () => {
   }
 }
 
-const applyPluginTheme = (panel: HTMLElement, tokens: BridgeContext['themeTokens']) => {
-  if (!tokens) {
-    return
-  }
-  for (const [key, value] of Object.entries(tokens)) {
+const applyPluginTheme = (panel: HTMLElement, context: BridgeContext) => {
+  for (const [key, value] of Object.entries(context.themeTokens || {})) {
     if (/^[a-zA-Z][a-zA-Z0-9]*$/.test(key) && typeof value === 'string') {
       panel.style.setProperty(`--plugin-theme-${kebabCase(key)}`, value)
     }
   }
+  const backdropImage = typeof context.backdropImage === 'string' ? context.backdropImage.trim() : ''
+  if (backdropImage) {
+    panel.style.setProperty('--plugin-workspace-bg-image', `url("${backdropImage}")`)
+    panel.classList.add('has-backdrop')
+    return
+  }
+  panel.style.setProperty('--plugin-workspace-bg-image', 'none')
+  panel.classList.remove('has-backdrop')
 }
 
 const renderNav = (state: RenderState) => {
@@ -613,25 +970,33 @@ const renderRoute = async (state: RenderState, routeKey: string) => {
     return
   }
   try {
-    const envelope = await state.bridge.api<PluginEnvelope>(state.route.apiPath, state.route.method, requestBodyFor(state.route))
+    const envelope = await state.bridge.api<PluginEnvelope>(pluginAPIPath(state.route.apiPath), state.route.method, requestBodyFor(state.route))
     renderDomainPage(state, normalizeEnvelope(state.route, envelope))
   } catch (error) {
     renderDomainPage(state, failedEnvelope(state.route, error))
   }
 }
 
+const pluginAPIPath = (apiPath: string) => `/api/plugins/scum-admin/${String(apiPath || '').replace(/^\/+/, '')}`
+
 const renderShell = (state: RenderState, envelope: PluginEnvelope) => {
   const route = state.route
   const tone = statusTone(envelope)
+  const summary = isUsable(envelope)
+    ? route.summary
+    : envelope.unavailable?.summary || route.unavailable.summary
   state.content.innerHTML = `
-    <div class="surface-title">
-      <div>
-        <h2>${escapeHtml(route.title)}</h2>
-        <p>${escapeHtml(route.summary)}</p>
+    <div class="route-shell">
+      <div class="surface-title">
+        <div>
+          <span class="surface-eyebrow">${escapeHtml(route.domainOwner || 'plugin workspace')}</span>
+          <h2>${escapeHtml(route.title)}</h2>
+          <p>${escapeHtml(summary)}</p>
+        </div>
+        <span class="status-pill" data-tone="${tone}">${statusText(route, envelope)}</span>
       </div>
-      <span class="status-pill" data-tone="${tone}">${statusText(route, envelope)}</span>
+      <div data-role="route-body"><div class="empty">正在加载 ${escapeHtml(route.title)}...</div></div>
     </div>
-    <div data-role="route-body"><div class="empty">正在加载 ${escapeHtml(route.title)}...</div></div>
   `
 }
 
@@ -700,9 +1065,10 @@ const renderUnavailableRoute = (state: RenderState, envelope: PluginEnvelope) =>
   renderShell(state, envelope)
   body(state).innerHTML = `
     <div class="notice">
-      <strong>${escapeHtml(envelope.unavailable?.reasonCode || state.route.unavailable.reasonCode)}</strong>
+      <strong>${escapeHtml(unavailableHeadline(state.route, envelope))}</strong>
       <p>${escapeHtml(envelope.unavailable?.summary || state.route.unavailable.summary)}</p>
       <p>${escapeHtml(envelope.unavailable?.nextAction || state.route.unavailable.nextAction)}</p>
+      ${blockedDiagnostics(envelope)}
     </div>
   `
 }
@@ -718,6 +1084,7 @@ const renderDatabaseNotice = (state: RenderState, envelope: PluginEnvelope) => {
 
 const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
   renderShell(state, envelope)
+  state.settingsModeTouched = false
   const blocked = !isUsable(envelope)
   const workspaces = Array.isArray(envelope.data?.workspaces) ? envelope.data.workspaces as ConfigWorkspace[] : []
   const supportedFiles = Array.isArray(envelope.data?.supportedFiles)
@@ -727,23 +1094,85 @@ const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
   const structuredPath = typeof envelope.data?.structuredPath === 'string' ? envelope.data.structuredPath : ''
   body(state).innerHTML = `
     ${blockedNotice(state.route, envelope)}
-    <div class="controls">
-      <select data-role="settings-workspace" ${blocked ? 'disabled' : ''}>
-        ${workspaces.map((workspace) => `
-          <option value="${escapeHtml(workspace.key)}">${escapeHtml(workspace.title)}</option>
-        `).join('')}
-      </select>
-      <select data-role="settings-file" ${blocked ? 'disabled' : ''}></select>
-      <button type="button" class="action-button" data-action="reload-settings" ${blocked ? 'disabled' : ''}>读取配置</button>
+    <div class="workspace-grid settings-frame">
+      <aside class="workspace-sidebar">
+        <section class="workspace-card workspace-card--primary">
+          <div class="workspace-card-heading">
+            <span class="surface-eyebrow">Config Workspace</span>
+            <strong>配置工作区</strong>
+            <p>优先打开 ServerSettings.ini 并停留在配置模式，需要时再切到文件模式查看原始内容。</p>
+          </div>
+          <div class="controls-stack">
+            <select data-role="settings-workspace" ${blocked ? 'disabled' : ''}>
+              ${workspaces.map((workspace) => `
+                <option value="${escapeHtml(workspace.key)}">${escapeHtml(workspace.title)}</option>
+              `).join('')}
+            </select>
+            <select data-role="settings-file" ${blocked ? 'disabled' : ''}></select>
+            <button type="button" class="action-button" data-action="reload-settings" ${blocked ? 'disabled' : ''}>重新读取配置</button>
+          </div>
+          <div class="notice compact" data-role="settings-status">等待读取配置目录。</div>
+          <div class="meta-grid meta-grid--compact">
+            <div class="meta-item">
+              <strong>当前文件</strong>
+              <span data-role="settings-current-file">未选择</span>
+            </div>
+            <div class="meta-item">
+              <strong>当前模式</strong>
+              <span data-role="settings-mode-note">配置模式</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="workspace-card">
+          <div class="workspace-card-heading">
+            <span class="surface-eyebrow">View Mode</span>
+            <strong>查看方式</strong>
+          </div>
+          <div class="settings-mode" role="group" aria-label="配置查看模式">
+            <button type="button" data-settings-mode="structured" aria-pressed="true">配置模式</button>
+            <button type="button" data-settings-mode="raw" aria-pressed="false">文件模式</button>
+          </div>
+          <div class="workspace-hint">
+            <strong>推荐顺序</strong>
+            <span>平时修改参数走配置模式，字段更清楚；只有排查原文、复制片段或处理未结构化文件时再进入文件模式。</span>
+          </div>
+        </section>
+      </aside>
+
+      <div class="workspace-main">
+        <section class="workspace-card settings-structured-panel" data-role="settings-structured-panel">
+          <div class="settings-structured-header">
+            <div>
+              <strong>结构化配置</strong>
+              <p>这里聚焦当前文件里最常改、最容易出错的服务器参数。字段直接回写到右侧原始文件编辑区。</p>
+            </div>
+            <span class="settings-file-mark" data-role="settings-file-label">未选择文件</span>
+          </div>
+          <div class="field-grid" data-role="settings-fields"></div>
+        </section>
+
+        <section class="settings-editor" data-role="settings-editor-panel">
+          <div class="settings-editor-header">
+            <div>
+              <strong>原始文件</strong>
+              <p>保留完整文本视图，适合核对差异、处理暂未结构化的配置项，或直接做一次性调整。</p>
+            </div>
+            <span class="settings-save-status" data-role="settings-save-status"></span>
+          </div>
+          <textarea data-role="settings-editor" spellcheck="false"></textarea>
+          <div class="settings-actions">
+            <button type="button" class="action-button" data-action="save-settings" disabled>提交修改</button>
+            <button type="button" class="action-button secondary" data-action="reset-settings" disabled>还原</button>
+          </div>
+        </section>
+      </div>
     </div>
-    <div class="notice" data-role="settings-status">等待读取配置目录。</div>
-    <div class="meta-grid" data-role="settings-meta"></div>
-    <div class="field-grid" data-role="settings-fields"></div>
-    <pre class="diff-box" data-role="diff">暂无配置内容。</pre>
   `
   if (blocked || workspaces.length === 0) {
     return
   }
+  bindSettingsModeControls(state)
   const run = () => {
     void loadSettingsWorkspace(state, workspaces, supportedFiles, structuredFields, structuredPath)
   }
@@ -752,6 +1181,12 @@ const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
   body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.addEventListener('change', () => {
     void loadSettingsFile(state, structuredFields, structuredPath)
   })
+  body(state).querySelector<HTMLButtonElement>('[data-action="save-settings"]')?.addEventListener('click', () => {
+    void saveSettingsFile(state, structuredPath)
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="reset-settings"]')?.addEventListener('click', () => resetSettingsEditor(state, structuredFields, structuredPath))
+  body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')?.addEventListener('input', () => syncSettingsEditorState(state, structuredFields, structuredPath))
+  setSettingsViewMode(state, state.settingsViewMode)
   run()
 }
 
@@ -860,18 +1295,17 @@ const loadSettingsWorkspace = async (state: RenderState, workspaces: ConfigWorks
   }
   setRouteNotice(state, 'settings-status', `正在读取 ${workspace.title}...`)
   try {
-    const entries = await loadDirectoryEntries(state, workspace.directoryPath)
+    const entries = normalizeWorkspaceEntries(workspace.directoryPath, await loadDirectoryEntries(state, workspace.directoryPath))
     const scopedSupportedFiles = workspace.supportedFiles && workspace.supportedFiles.length > 0 ? workspace.supportedFiles : supportedFiles
     const filteredEntries = filterEntriesByRelativePath(entries, scopedSupportedFiles)
     const prioritizedEntries = prioritizeFiles(filteredEntries, scopedSupportedFiles)
-    populateFileSelect(state, 'settings-file', prioritizedEntries, workspace.defaultFilePath)
-    setRouteNotice(state, 'settings-status', `${workspace.title} 已加载，共 ${prioritizedEntries.length} 个受支持文件。`)
+    populateFileSelect(state, 'settings-file', prioritizedEntries, structuredPath || workspace.defaultFilePath)
+    setRouteNotice(state, 'settings-status', prioritizedEntries.length > 0 ? '配置目录已加载。' : '未找到可读取的配置文件。', prioritizedEntries.length === 0)
     await loadSettingsFile(state, structuredFields, structuredPath)
   } catch (error) {
     setRouteNotice(state, 'settings-status', coreErrorMessage(error), true)
-    setRouteMeta(state, 'settings-meta', [])
     setSettingsFields(state, [])
-    setDiff(state, '暂无配置内容。')
+    setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
   }
 }
 
@@ -879,34 +1313,149 @@ const loadSettingsFile = async (state: RenderState, structuredFields: Structured
   const relativePath = body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.value || ''
   if (!relativePath) {
     setRouteNotice(state, 'settings-status', '当前目录下没有可读取的配置文件。', true)
-    setRouteMeta(state, 'settings-meta', [])
     setSettingsFields(state, [])
-    setDiff(state, '暂无配置内容。')
+    setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
     return
   }
-  setRouteNotice(state, 'settings-status', `正在读取 ${relativePath}...`)
+  setRouteNotice(state, 'settings-status', '正在读取配置...')
   try {
     const result = await readFile(state, relativePath)
     const content = typeof result.content === 'string' ? result.content : ''
-    const redacted = redactSecrets(content)
-    const fields = relativePath === structuredPath
-      ? resolveStructuredFields(structuredFields, content)
-      : []
+    const fields = resolveEditableSettingsFields(structuredFields, content, sameRelativePath(relativePath, structuredPath))
     setSettingsFields(state, fields)
-    setRouteMeta(state, 'settings-meta', [
-      { label: '文件路径', value: relativePath },
-      { label: '校验和', value: typeof result.checksum === 'string' ? result.checksum : '-' },
-      { label: '文件大小', value: formatByteCount(result.sizeBytes) },
-      { label: '截断状态', value: result.truncated ? '已截断' : '完整' }
-    ])
-    setDiff(state, redacted || '文件为空。')
-    setRouteNotice(state, 'settings-status', `${relativePath} 已加载。`)
+    setSettingsEditor(state, relativePath, content, typeof result.checksum === 'string' ? result.checksum : '', structuredFields, structuredPath)
+    if (!state.settingsModeTouched) {
+      setSettingsViewMode(state, defaultSettingsViewMode(relativePath, structuredPath, fields))
+    }
+    setRouteNotice(state, 'settings-status', result.truncated ? '配置已读取，但内容被截断，暂不能提交修改。' : '配置已加载。', Boolean(result.truncated))
   } catch (error) {
     setRouteNotice(state, 'settings-status', coreErrorMessage(error), true)
-    setRouteMeta(state, 'settings-meta', [])
     setSettingsFields(state, [])
-    setDiff(state, '暂无配置内容。')
+    setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
   }
+}
+
+const saveSettingsFile = async (state: RenderState, structuredPath: string) => {
+  const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
+  const status = body(state).querySelector<HTMLElement>('[data-role="settings-save-status"]')
+  if (!editor || !status) {
+    return
+  }
+  const relativePath = editor.dataset.path || ''
+  const original = editor.dataset.original || ''
+  const checksum = editor.dataset.checksum || ''
+  if (!sameRelativePath(relativePath, structuredPath)) {
+    status.textContent = '当前文件暂不支持提交修改。'
+    return
+  }
+  if (editor.value === original) {
+    status.textContent = '没有需要提交的修改。'
+    return
+  }
+  status.textContent = '正在提交修改...'
+  try {
+    const serverInstanceID = currentServerInstanceID(state)
+    const result = await state.bridge.api<PluginEnvelope>(`/api/v1/scum/instances/${encodeURIComponent(serverInstanceID)}/config`, 'PATCH', {
+      serverInstanceId: serverInstanceID,
+      expectedChecksum: checksum,
+      rawContent: editor.value
+    })
+    const envelope = normalizeEnvelope(state.route, result)
+    status.textContent = operationSummary(envelope)
+  } catch (error) {
+    status.textContent = coreErrorMessage(error)
+  }
+}
+
+const resetSettingsEditor = (state: RenderState, structuredFields: StructuredField[], structuredPath: string) => {
+  const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
+  if (!editor) {
+    return
+  }
+  editor.value = editor.dataset.original || ''
+  syncSettingsEditorState(state, structuredFields, structuredPath)
+}
+
+const syncSettingsEditorState = (state: RenderState, structuredFields: StructuredField[], structuredPath: string) => {
+  const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
+  const saveButton = body(state).querySelector<HTMLButtonElement>('[data-action="save-settings"]')
+  const resetButton = body(state).querySelector<HTMLButtonElement>('[data-action="reset-settings"]')
+  const status = body(state).querySelector<HTMLElement>('[data-role="settings-save-status"]')
+  if (!editor) {
+    return
+  }
+  const dirty = editor.value !== (editor.dataset.original || '')
+  const canSave = dirty && sameRelativePath(editor.dataset.path || '', structuredPath) && Boolean(editor.dataset.checksum)
+  if (saveButton) {
+    saveButton.disabled = !canSave
+  }
+  if (resetButton) {
+    resetButton.disabled = !dirty
+  }
+  if (status && dirty) {
+    status.textContent = ''
+  }
+  setSettingsFields(state, resolveEditableSettingsFields(structuredFields, editor.value, sameRelativePath(editor.dataset.path || '', structuredPath)))
+}
+
+const setSettingsEditor = (state: RenderState, path: string, content: string, checksum: string, structuredFields: StructuredField[], structuredPath: string) => {
+  const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
+  const label = body(state).querySelector<HTMLElement>('[data-role="settings-file-label"]')
+  const status = body(state).querySelector<HTMLElement>('[data-role="settings-save-status"]')
+  if (!editor) {
+    return
+  }
+  editor.value = content
+  editor.dataset.original = content
+  editor.dataset.path = path
+  editor.dataset.checksum = checksum
+  editor.dataset.structuredPath = structuredPath
+  if (label) {
+    label.textContent = path ? fileNameFromPath(path) : ''
+  }
+  setTextRole(state, 'settings-current-file', path || '未选择')
+  if (status) {
+    status.textContent = ''
+  }
+  syncSettingsEditorState(state, structuredFields, structuredPath)
+}
+
+const bindSettingsModeControls = (state: RenderState) => {
+  body(state).querySelectorAll<HTMLButtonElement>('button[data-settings-mode]').forEach((button) => {
+    button.addEventListener('click', () => {
+      setSettingsViewMode(state, button.dataset.settingsMode === 'raw' ? 'raw' : 'structured', true)
+    })
+  })
+}
+
+const setSettingsViewMode = (state: RenderState, mode: RenderState['settingsViewMode'], touched = false) => {
+  if (touched) {
+    state.settingsModeTouched = true
+  }
+  state.settingsViewMode = mode
+  const fields = body(state).querySelector<HTMLElement>('[data-role="settings-fields"]')
+  const structuredPanel = body(state).querySelector<HTMLElement>('[data-role="settings-structured-panel"]')
+  const editor = body(state).querySelector<HTMLElement>('[data-role="settings-editor-panel"]')
+  body(state).querySelectorAll<HTMLButtonElement>('button[data-settings-mode]').forEach((button) => {
+    button.setAttribute('aria-pressed', button.dataset.settingsMode === mode ? 'true' : 'false')
+  })
+  if (structuredPanel) {
+    structuredPanel.hidden = mode !== 'structured'
+  }
+  if (fields) {
+    fields.hidden = mode !== 'structured'
+  }
+  if (editor) {
+    editor.hidden = mode !== 'raw'
+  }
+  setTextRole(state, 'settings-mode-note', mode === 'structured' ? '配置模式' : '文件模式')
+}
+
+const defaultSettingsViewMode = (relativePath: string, structuredPath: string, fields: ResolvedStructuredField[]): RenderState['settingsViewMode'] => {
+  if (normalizeRelativePath(relativePath) === normalizeRelativePath(structuredPath)) {
+    return 'structured'
+  }
+  return 'raw'
 }
 
 const loadLogWorkspace = async (state: RenderState, workspaces: LogWorkspace[]) => {
@@ -918,7 +1467,7 @@ const loadLogWorkspace = async (state: RenderState, workspaces: LogWorkspace[]) 
   }
   setRouteNotice(state, 'logs-status', `正在读取 ${workspace.title}...`)
   try {
-    const entries = await loadDirectoryEntries(state, workspace.directoryPath)
+    const entries = normalizeWorkspaceEntries(workspace.directoryPath, await loadDirectoryEntries(state, workspace.directoryPath))
     populateFileSelect(state, 'log-file', prioritizeFiles(entries, workspace.preferredFiles || []))
     setRouteNotice(state, 'logs-status', `${workspace.title} 已加载，共 ${entries.length} 个文件。`)
     await loadLogFile(state)
@@ -1068,18 +1617,15 @@ const sampleRow = (columns: Array<{ key: string; label: string }>) => {
 
 const loadDirectoryEntries = async (state: RenderState, relativePath: string) => {
   const serverInstanceID = currentServerInstanceID(state)
-  const dispatch = await coreJSON<CoreFileDispatchResponse>(`/api/v1/server-instances/${encodeURIComponent(serverInstanceID)}/files?path=${encodeURIComponent(relativePath)}`)
-  const operation = await waitForFileOperation(dispatch.operation.id)
+  const dispatch = await coreJSON<CoreFileDispatchResponse>(state, `/api/v1/server-instances/${encodeURIComponent(serverInstanceID)}/files?path=${encodeURIComponent(relativePath)}`)
+  const operation = await waitForFileOperation(state, dispatch.operation.id)
   return normalizeFileEntries(operation.result?.entries)
 }
 
 const readFile = async (state: RenderState, relativePath: string) => {
   const serverInstanceID = currentServerInstanceID(state)
-  const dispatch = await coreJSON<CoreFileDispatchResponse>(`/api/v1/server-instances/${encodeURIComponent(serverInstanceID)}/files/read`, {
-    method: 'POST',
-    body: JSON.stringify({ path: relativePath, contentMode: 'text' })
-  })
-  const operation = await waitForFileOperation(dispatch.operation.id)
+  const dispatch = await coreJSON<CoreFileDispatchResponse>(state, `/api/v1/server-instances/${encodeURIComponent(serverInstanceID)}/files/read`, 'POST', { path: relativePath, contentMode: 'text' })
+  const operation = await waitForFileOperation(state, dispatch.operation.id)
   return {
     content: operation.result?.content,
     checksum: operation.result?.checksum,
@@ -1089,25 +1635,13 @@ const readFile = async (state: RenderState, relativePath: string) => {
   }
 }
 
-const coreJSON = async <T>(path: string, init: RequestInit = {}) => {
-  const response = await fetch(path, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(init.headers || {})
-    }
-  })
-  if (!response.ok) {
-    throw new Error(await readErrorSummary(response))
-  }
-  return await response.json() as T
+const coreJSON = async <T>(state: RenderState, path: string, method = 'GET', body?: unknown) => {
+  return await state.bridge.api<T>(path, method, body)
 }
 
-const waitForFileOperation = async (operationID: string) => {
+const waitForFileOperation = async (state: RenderState, operationID: string) => {
   for (let attempt = 0; attempt < 30; attempt += 1) {
-    const operation = await coreJSON<CoreFileOperation>(`/api/v1/file-operations/${encodeURIComponent(operationID)}`)
+    const operation = await coreJSON<CoreFileOperation>(state, `/api/v1/file-operations/${encodeURIComponent(operationID)}`)
     if (operation.status === 'succeeded') {
       return operation
     }
@@ -1119,19 +1653,6 @@ const waitForFileOperation = async (operationID: string) => {
   throw new Error('file operation timed out')
 }
 
-const readErrorSummary = async (response: Response) => {
-  const text = await response.text()
-  try {
-    const payload = JSON.parse(text) as { error?: string }
-    if (payload?.error) {
-      return payload.error
-    }
-  } catch {
-    // ignore JSON parse errors and fall back to text.
-  }
-  return text || `request failed: ${response.status}`
-}
-
 const normalizeFileEntries = (value: unknown) => {
   if (!Array.isArray(value)) {
     return [] as FileListEntry[]
@@ -1141,12 +1662,24 @@ const normalizeFileEntries = (value: unknown) => {
     .filter((item) => !item.directory)
 }
 
+const normalizeWorkspaceEntries = (workspacePath: string, entries: FileListEntry[]) => {
+  return entries.map((entry) => {
+    const relativePath = normalizeRelativePath(entry.relativePath)
+    return {
+      ...entry,
+      name: entry.name || fileNameFromPath(relativePath),
+      relativePath: relativePathIncludesDirectory(relativePath, workspacePath) ? relativePath : joinRelativePath(workspacePath, relativePath)
+    }
+  })
+}
+
 const populateFileSelect = (state: RenderState, role: string, entries: FileListEntry[], preferredPath?: string) => {
   const select = body(state).querySelector<HTMLSelectElement>(`[data-role="${role}"]`)
   if (!select) {
     return
   }
-  const preferred = entries.find((entry) => entry.relativePath === preferredPath)?.relativePath || entries[0]?.relativePath || ''
+  const normalizedPreferred = normalizeRelativePath(preferredPath || '')
+  const preferred = entries.find((entry) => sameRelativePath(entry.relativePath, normalizedPreferred) || fileNameFromPath(entry.relativePath).toLowerCase() === fileNameFromPath(normalizedPreferred).toLowerCase())?.relativePath || entries[0]?.relativePath || ''
   select.innerHTML = entries.map((entry) => `
     <option value="${escapeHtml(entry.relativePath)}"${entry.relativePath === preferred ? ' selected' : ''}>${escapeHtml(entry.name)}</option>
   `).join('')
@@ -1156,10 +1689,14 @@ const prioritizeFiles = (entries: FileListEntry[], preferredFiles: string[]) => 
   if (preferredFiles.length === 0) {
     return entries
   }
-  const priority = new Map(preferredFiles.map((name, index) => [name.toLowerCase(), index]))
+  const priority = new Map<string, number>()
+  preferredFiles.forEach((name, index) => {
+    priority.set(normalizeRelativePath(name).toLowerCase(), index)
+    priority.set(fileNameFromPath(name).toLowerCase(), index)
+  })
   return [...entries].sort((left, right) => {
-    const leftPriority = priority.has(left.name.toLowerCase()) ? priority.get(left.name.toLowerCase())! : preferredFiles.length + 1
-    const rightPriority = priority.has(right.name.toLowerCase()) ? priority.get(right.name.toLowerCase())! : preferredFiles.length + 1
+    const leftPriority = priority.get(normalizeRelativePath(left.relativePath).toLowerCase()) ?? priority.get(left.name.toLowerCase()) ?? preferredFiles.length + 1
+    const rightPriority = priority.get(normalizeRelativePath(right.relativePath).toLowerCase()) ?? priority.get(right.name.toLowerCase()) ?? preferredFiles.length + 1
     if (leftPriority === rightPriority) {
       return left.name.localeCompare(right.name)
     }
@@ -1171,9 +1708,32 @@ const filterEntriesByRelativePath = (entries: FileListEntry[], allowedPaths: str
   if (allowedPaths.length === 0) {
     return entries
   }
-  const allowedSet = new Set(allowedPaths.map((path) => path.toLowerCase()))
-  return entries.filter((entry) => allowedSet.has(entry.relativePath.toLowerCase()))
+  const allowedSet = new Set<string>()
+  for (const path of allowedPaths) {
+    allowedSet.add(normalizeRelativePath(path).toLowerCase())
+    allowedSet.add(fileNameFromPath(path).toLowerCase())
+  }
+  return entries.filter((entry) => allowedSet.has(normalizeRelativePath(entry.relativePath).toLowerCase()) || allowedSet.has(entry.name.toLowerCase()))
 }
+
+const normalizeRelativePath = (path: string) => String(path || '').replace(/\\+/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/').trim()
+
+const joinRelativePath = (basePath: string, path: string) => {
+  const base = normalizeRelativePath(basePath)
+  const child = normalizeRelativePath(path)
+  if (!base) {
+    return child
+  }
+  return child ? `${base}/${child}` : base
+}
+
+const relativePathIncludesDirectory = (path: string, directoryPath: string) => {
+  const normalizedPath = normalizeRelativePath(path).toLowerCase()
+  const normalizedDirectory = normalizeRelativePath(directoryPath).toLowerCase()
+  return normalizedPath === normalizedDirectory || normalizedPath.startsWith(`${normalizedDirectory}/`)
+}
+
+const sameRelativePath = (left: string, right: string) => normalizeRelativePath(left).toLowerCase() === normalizeRelativePath(right).toLowerCase()
 
 const resolveStructuredFields = (definitions: StructuredField[], content: string) => {
   const values = parseIniValues(content)
@@ -1241,20 +1801,90 @@ const setSettingsFields = (state: RenderState, fields: ResolvedStructuredField[]
     return
   }
   if (fields.length === 0) {
-    target.innerHTML = ''
+    target.innerHTML = '<div class="empty inline">当前文件没有可渲染的结构化配置项，可切换到文件模式直接查看原文。</div>'
     return
   }
   target.innerHTML = fields.map((field) => `
-    <label>
+    <label data-section="${escapeHtml(field.section)}" data-key="${escapeHtml(field.key)}">
       <strong>${escapeHtml(field.label)}</strong>
-      <input value="${escapeHtml(field.value)}" readonly />
+      <input value="${escapeHtml(field.value)}" ${field.editable ? '' : 'readonly'} data-setting-section="${escapeHtml(field.section)}" data-setting-key="${escapeHtml(field.key)}" />
       <span>${escapeHtml(field.validator)}</span>
     </label>
   `).join('')
+  target.querySelectorAll<HTMLInputElement>('input[data-setting-section]').forEach((input) => {
+    input.addEventListener('input', () => {
+      const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
+      if (!editor || input.readOnly) {
+        return
+      }
+      editor.value = updateIniValue(editor.value, input.dataset.settingSection || '', input.dataset.settingKey || '', input.value)
+      syncSettingsEditorState(state, fields, editor.dataset.structuredPath || '')
+    })
+  })
+}
+
+const resolveEditableSettingsFields = (definitions: StructuredField[], content: string, editable: boolean) => {
+  const known = new Map(definitions.map((definition) => [`${definition.section}.${definition.key}`, definition]))
+  const values = parseIniValues(content)
+  const fields: ResolvedStructuredField[] = []
+  for (const [id, value] of Object.entries(values)) {
+    const definition = known.get(id)
+    if (definition) {
+      fields.push({ ...definition, value: definition.sensitive ? (value ? '已设置' : '') : value, editable: editable && !definition.sensitive })
+      continue
+    }
+    const dotIndex = id.lastIndexOf('.')
+    if (dotIndex <= 0) {
+      continue
+    }
+    const section = id.slice(0, dotIndex)
+    const key = id.slice(dotIndex + 1)
+    fields.push({ section, key, label: key, validator: section, value, editable })
+  }
+  return fields.slice(0, 80)
+}
+
+const updateIniValue = (content: string, section: string, key: string, value: string) => {
+  const lines = content.split(/\r?\n/)
+  let currentSection = ''
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index]
+    const line = rawLine.trim()
+    if (line.startsWith('[') && line.endsWith(']')) {
+      currentSection = line.slice(1, -1).trim()
+      continue
+    }
+    if (currentSection !== section || line.startsWith(';') || line.startsWith('#')) {
+      continue
+    }
+    const separatorIndex = rawLine.indexOf('=')
+    if (separatorIndex < 0) {
+      continue
+    }
+    const currentKey = rawLine.slice(0, separatorIndex).trim()
+    if (currentKey !== key) {
+      continue
+    }
+    lines[index] = `${rawLine.slice(0, separatorIndex + 1)}${value}`
+    return lines.join('\n')
+  }
+  return content
+}
+
+const fileNameFromPath = (path: string) => {
+  const parts = path.split('/').filter(Boolean)
+  return parts[parts.length - 1] || path
 }
 
 const setLogText = (state: RenderState, text: string) => {
   const target = body(state).querySelector<HTMLElement>('[data-role="logs"]')
+  if (target) {
+    target.textContent = text
+  }
+}
+
+const setTextRole = (state: RenderState, role: string, text: string) => {
+  const target = body(state).querySelector<HTMLElement>(`[data-role="${role}"]`)
   if (target) {
     target.textContent = text
   }
@@ -1309,16 +1939,94 @@ const normalizeEnvelope = (route: DomainRoute, envelope: PluginEnvelope | undefi
   }
 })
 
-const failedEnvelope = (route: DomainRoute, error: unknown): PluginEnvelope => {
+const pluginErrorCode = (error: unknown) => {
+  const candidate = error as PluginAPIError | undefined
+  return typeof candidate?.code === 'string' ? candidate.code.trim() : ''
+}
+
+const pluginErrorMessage = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error || 'plugin api request failed')
+  return message.trim().slice(0, 180)
+}
+
+const routeFailurePresentation = (route: DomainRoute, error: unknown) => {
+  const code = pluginErrorCode(error) || 'api_error'
+  const message = pluginErrorMessage(error)
+  if (code === 'session_unavailable' || /plugin api gateway session is unavailable/i.test(message)) {
+    return {
+      state: 'failed' as const,
+      reasonCode: 'plugin_session_unavailable',
+      summary: `${route.title} 当前无法连接到 SCUM 管理服务会话，通常是插件运行时、执行端或桥接会话尚未恢复。`,
+      nextAction: '请先刷新服务器状态；如果仍未恢复，请让具备管理权限的协作者修复服务或重启 SCUM 管理插件。',
+      code,
+      message
+    }
+  }
+  if (code === 'unauthorized' || /platform session expired/i.test(message)) {
+    return {
+      state: 'denied' as const,
+      reasonCode: 'platform_session_expired',
+      summary: '平台登录状态已过期，当前无法继续访问这个 SCUM 管理页面。',
+      nextAction: '请重新登录平台后重试。',
+      code,
+      message
+    }
+  }
+  if (code === 'api_error' && /api timeout|bridge timeout/i.test(message)) {
+    return {
+      state: 'failed' as const,
+      reasonCode: 'plugin_request_timeout',
+      summary: `${route.title} 请求超时，当前服务没有在预期时间内返回结果。`,
+      nextAction: '请刷新服务器状态后重试；如果多次超时，请让具备管理权限的协作者检查服务恢复状态。',
+      code,
+      message
+    }
+  }
   return {
-    ...emptyEnvelope(route, message.includes('403') ? 'denied' : 'failed'),
-    error: { code: 'api_error', message: message.slice(0, 180) },
+    state: message.includes('403') ? 'denied' as const : 'failed' as const,
+    reasonCode: route.unavailable.reasonCode,
+    summary: route.unavailable.summary,
+    nextAction: route.unavailable.nextAction,
+    code,
+    message
+  }
+}
+
+const unavailableHeadline = (route: DomainRoute, envelope: PluginEnvelope) => {
+  const reasonCode = envelope.unavailable?.reasonCode || route.unavailable.reasonCode
+  if (reasonCode === 'platform_session_expired') {
+    return '登录状态已过期'
+  }
+  if (reasonCode === 'plugin_request_timeout') {
+    return `${route.title} 响应超时`
+  }
+  return `${route.title} 当前不可用`
+}
+
+const blockedDiagnostics = (envelope: PluginEnvelope) => {
+  const message = envelope.error?.message?.trim()
+  if (!message) {
+    return ''
+  }
+  return `
+    <details class="diagnostic-details">
+      <summary>查看诊断信息</summary>
+      <p><strong>错误码</strong> ${escapeHtml(envelope.error?.code || envelope.unavailable?.code || 'api_error')}</p>
+      <p><strong>详情</strong> ${escapeHtml(message)}</p>
+    </details>
+  `
+}
+
+const failedEnvelope = (route: DomainRoute, error: unknown): PluginEnvelope => {
+  const presentation = routeFailurePresentation(route, error)
+  return {
+    ...emptyEnvelope(route, presentation.state),
+    error: { code: presentation.code, message: presentation.message },
     unavailable: {
-      code: 'api_error',
-      reasonCode: 'api_error',
-      summary: message.slice(0, 180),
-      nextAction: route.unavailable.nextAction
+      code: presentation.code,
+      reasonCode: presentation.reasonCode,
+      summary: presentation.summary,
+      nextAction: presentation.nextAction
     }
   }
 }
@@ -1333,9 +2041,10 @@ const blockedNotice = (route: DomainRoute, envelope: PluginEnvelope) => {
   }
   return `
     <div class="notice ${envelope.state === 'denied' ? 'error' : ''}">
-      <strong>${escapeHtml(envelope.unavailable?.reasonCode || route.unavailable.reasonCode)}</strong>
+      <strong>${escapeHtml(unavailableHeadline(route, envelope))}</strong>
       <p>${escapeHtml(envelope.unavailable?.summary || route.unavailable.summary)}</p>
       <p>${escapeHtml(envelope.unavailable?.nextAction || route.unavailable.nextAction)}</p>
+      ${blockedDiagnostics(envelope)}
     </div>
   `
 }

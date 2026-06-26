@@ -1,6 +1,6 @@
 {
   "name": "scum-admin-plugin-frontend",
-  "version": "0.1.8",
+  "version": "0.1.13",
   "private": true,
   "type": "module",
   "description": "SCUM-owned frontend bundle and resources for the scum-admin plugin.",

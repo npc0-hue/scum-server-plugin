@@ -1,18 +1,18 @@
 {
   "pluginId": "scum-admin",
-  "pluginVersion": "0.1.8",
+  "pluginVersion": "0.1.13",
   "bundle": {
-    "url": "/plugin-assets/scum-admin/0.1.8/index.html",
+    "url": "/plugin-assets/scum-admin/0.1.13/index.html",
     "entry": "main"
   },
   "assetRoots": [
-    "/plugin-assets/scum-admin/0.1.8/assets/"
+    "/plugin-assets/scum-admin/0.1.13/assets/"
   ],
   "artifact": {
     "mediaType": "text/html+vite",
     "entryResource": "index.html",
     "digestAlgorithm": "sha256",
-    "digest": "162bda8812fc0a51980887754f42a74eae5f769296bc019d41011c5fb5f96f58",
+    "digest": "afb2a14798483c48ad4c181014468feac07c71a64737773acac8ede8defc9da7",
     "sourceSummary": "SCUM-owned management routes, config schema, trade-goods constants, item-image roots, and map-tile roots live under plugins/scum-admin/frontend."
   },
   "bridge": {
@@ -43,7 +43,7 @@
         "POST"
       ],
       "maxBodyBytes": 65536,
-      "maxResponseBytes": 65536
+      "maxResponseBytes": 1048576
     }
   },
   "ownedSurfaces": [

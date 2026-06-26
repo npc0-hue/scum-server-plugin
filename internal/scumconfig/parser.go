@@ -117,7 +117,7 @@ func ApplyChanges(content string, changes []Change) (string, error) {
 }
 
 // ValidateChanges validates a SCUM configuration patch request.
-// request contains the target instance, expected checksum, and changed values, and the function returns a normalized patch plan or validation errors.
+// request contains the target instance, expected checksum, and either raw config text or changed values, and the function returns a normalized patch plan or validation errors.
 func ValidateChanges(request PatchRequest) (PatchPlan, []ValidationError) {
 	var errs []ValidationError
 	if strings.TrimSpace(request.ServerInstanceID) == "" {
@@ -126,8 +126,14 @@ func ValidateChanges(request PatchRequest) (PatchPlan, []ValidationError) {
 	if strings.TrimSpace(request.ExpectedChecksum) == "" {
 		errs = append(errs, ValidationError{Field: "expectedChecksum", Code: "required", Message: "expected checksum is required"})
 	}
-	if len(request.Changes) == 0 {
+	rawContent := strings.TrimSpace(request.RawContent)
+	if rawContent == "" && len(request.Changes) == 0 {
 		errs = append(errs, ValidationError{Field: "changes", Code: "required", Message: "at least one change is required"})
+	}
+	if rawContent != "" {
+		if _, err := Parse(request.RawContent); err != nil {
+			errs = append(errs, ValidationError{Field: "rawContent", Code: "invalid_ini", Message: err.Error()})
+		}
 	}
 	normalized := make([]Change, 0, len(request.Changes))
 	seen := map[string]bool{}
@@ -138,16 +144,17 @@ func ValidateChanges(request PatchRequest) (PatchPlan, []ValidationError) {
 		id := settingID(change.Section, change.Key)
 		rule, ok := supportedSettings[id]
 		field := fmt.Sprintf("changes[%d]", index)
-		if !ok {
-			errs = append(errs, ValidationError{Field: field, Code: "unsupported_setting", Message: "setting is not supported by this SCUM plugin slice"})
-			continue
-		}
 		if seen[id] {
 			errs = append(errs, ValidationError{Field: field, Code: "duplicate_setting", Message: "setting appears more than once"})
 			continue
 		}
 		seen[id] = true
-		if err := validateValue(rule, change.Value); err != nil {
+		if ok {
+			if err := validateValue(rule, change.Value); err != nil {
+				errs = append(errs, ValidationError{Field: field + ".value", Code: "invalid_value", Message: err.Error()})
+				continue
+			}
+		} else if err := validateGenericSetting(change); err != nil {
 			errs = append(errs, ValidationError{Field: field + ".value", Code: "invalid_value", Message: err.Error()})
 			continue
 		}
@@ -156,13 +163,52 @@ func ValidateChanges(request PatchRequest) (PatchPlan, []ValidationError) {
 	if len(errs) > 0 {
 		return PatchPlan{}, errs
 	}
+	summary := changeSummary(normalized)
+	if rawContent != "" {
+		summary = "SCUM ServerSettings.ini raw edit"
+	}
 	return PatchPlan{
 		ServerInstanceID: strings.TrimSpace(request.ServerInstanceID),
 		Path:             SettingsPath,
 		ExpectedChecksum: strings.TrimSpace(request.ExpectedChecksum),
+		RawContent:       request.RawContent,
 		Changes:          normalized,
-		Summary:          changeSummary(normalized),
+		Summary:          summary,
 	}, nil
+}
+
+// validateGenericSetting checks an existing SCUM INI key that is not part of the curated quick-edit set.
+// change contains section, key and value text from the browser editor, and the function returns an error when identifiers or single-line value bounds are unsafe.
+func validateGenericSetting(change Change) error {
+	if !safeSettingIdentifier(change.Section) {
+		return errors.New("section name is invalid")
+	}
+	if !safeSettingIdentifier(change.Key) {
+		return errors.New("setting key is invalid")
+	}
+	if strings.ContainsAny(change.Value, "\r\n") {
+		return errors.New("value must be single line")
+	}
+	if len([]rune(change.Value)) > 4096 {
+		return errors.New("value must be at most 4096 characters")
+	}
+	return nil
+}
+
+// safeSettingIdentifier reports whether a SCUM INI section or key name is safe for patch addressing.
+// value is the raw identifier from a change request, and the function returns true only for non-empty ASCII identifiers made of letters, digits, dot, underscore or dash.
+func safeSettingIdentifier(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || len(trimmed) > 128 {
+		return false
+	}
+	for _, char := range trimmed {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '.' || char == '_' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // SupportedSettings returns the allowlisted section/key identifiers for this slice.

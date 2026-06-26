@@ -15,6 +15,7 @@ export interface BridgeContext {
   locale: string
   theme: string
   themeTokens?: Record<string, string>
+  backdropImage?: string
   bridgeVersion: string
   sdkVersion: string
   requestId: string
@@ -39,6 +40,10 @@ type PendingRequest = {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timeout: ReturnType<typeof setTimeout>
+}
+
+type PluginAPIError = Error & {
+  code?: string
 }
 
 export class ScumPluginBridge {
@@ -126,7 +131,7 @@ export class ScumPluginBridge {
       this.pending.delete(envelope.requestId)
       const payload = envelope.payload as { body?: unknown; error?: { message?: string; code?: string } }
       if (payload?.error) {
-        pending.reject(new Error(payload.error.message || payload.error.code || 'api error'))
+        pending.reject(pluginAPIError(payload.error.code, payload.error.message || payload.error.code || 'api error'))
       } else {
         pending.resolve(payload?.body)
       }
@@ -147,6 +152,12 @@ export class ScumPluginBridge {
       payload
     } satisfies BridgeEnvelope, '*')
   }
+}
+
+const pluginAPIError = (code: string | undefined, message: string) => {
+  const error = new Error(message) as PluginAPIError
+  error.code = code || 'api_error'
+  return error
 }
 
 const requestID = (prefix: string) => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`

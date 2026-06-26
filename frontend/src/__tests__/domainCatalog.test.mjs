@@ -84,6 +84,15 @@ for (const sample of assetIndex.icons.samples) {
 for (const marker of ['renderSettingsPage', 'renderPlayersPage', 'renderLogsPage', 'renderUpdatePage', 'renderTasksPage']) {
   assert.equal(mainSource.includes(marker), true, `frontend shell should include ${marker}`)
 }
+for (const marker of ['settingsViewMode', 'data-settings-mode="structured"', '配置模式', '文件模式', 'defaultSettingsViewMode']) {
+  assert.equal(mainSource.includes(marker), true, `settings route should default to explicit config mode marker: ${marker}`)
+}
+for (const marker of ['backdropImage', '--plugin-workspace-bg-image', 'has-backdrop']) {
+  assert.equal(mainSource.includes(marker), true, `plugin theme bridge should preserve platform backdrop marker: ${marker}`)
+}
+for (const marker of ['normalizeWorkspaceEntries', 'normalizeRelativePath', 'sameRelativePath']) {
+  assert.equal(mainSource.includes(marker), true, `file capability paths should stay normalized for mixed agent results: ${marker}`)
+}
 for (const marker of ['sourceSummary(envelope)', '数据来源', 'source.kind', 'source.mode']) {
   assert.equal(mainSource.includes(marker), true, `frontend shell should preserve SCUM read source summary marker: ${marker}`)
 }
@@ -92,6 +101,8 @@ assert.ok(
   mainSource.indexOf('const context = await bridge.init()') < mainSource.indexOf('await renderRoute(renderState, renderState.route.key)'),
   'plugin bridge must initialize before route API rendering'
 )
+assert.equal(mainSource.includes('pluginVersionFromAssetURL(window.location.href)'), true, 'plugin bridge version should come from the served /plugin-assets namespace')
+assert.equal(mainSource.includes("new ScumPluginBridge('scum-admin', '"), false, 'plugin bridge must not hard-code package version in handshake')
 assert.equal(mainSource.includes('scum-admin-pre'), false, 'primary plugin UI must not be the old raw JSON demo panel')
 assert.equal(mainSource.includes('capability-plan JSON'), false, 'primary plugin UI must not describe raw plan JSON as product UI')
 

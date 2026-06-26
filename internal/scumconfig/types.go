@@ -67,12 +67,14 @@ type FileReadResult struct {
 	Content string `json:"content"`
 }
 
-// PatchRequest 表示 SCUM 配置 diff 更新命令请求。
+// PatchRequest 表示 SCUM 配置更新命令请求。
 type PatchRequest struct {
 	// ServerInstanceID 是目标服务器实例 ID。
 	ServerInstanceID string `json:"serverInstanceId"`
 	// ExpectedChecksum 是调用方读取配置时看到的文件校验和。
 	ExpectedChecksum string `json:"expectedChecksum"`
+	// RawContent 是调用方提交的完整配置文本；为空时表示按 Changes 提交键值修改。
+	RawContent string `json:"rawContent,omitempty"`
 	// Changes 是请求修改的配置键列表。
 	Changes []Change `json:"changes"`
 }
@@ -85,6 +87,8 @@ type PatchPlan struct {
 	Path string `json:"path"`
 	// ExpectedChecksum 是写入前必须匹配的文件校验和。
 	ExpectedChecksum string `json:"expectedChecksum"`
+	// RawContent 是已经过验证的完整配置文本；为空时表示按 Changes 执行补丁。
+	RawContent string `json:"rawContent,omitempty"`
 	// Changes 是已经过验证的配置修改列表。
 	Changes []Change `json:"changes"`
 	// Summary 是可用于审计和变更预览的短摘要。
