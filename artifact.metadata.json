@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "kind": "runtime_image",
-      "sourceRef": "npc0/scum-admin-plugin:v0.1.13",
+      "sourceRef": "npc0/scum-admin-plugin:v0.1.18",
       "mediaType": "application/vnd.oci.image.manifest.v1+json",
       "byteSize": 0,
       "sha256": "",
@@ -13,7 +13,7 @@
     },
     {
       "kind": "image_frontend",
-      "sourceRef": "npc0/scum-admin-plugin:v0.1.13",
+      "sourceRef": "npc0/scum-admin-plugin:v0.1.18",
       "mediaType": "application/vnd.scum.plugin.image-frontend.v1+json",
       "byteSize": 0,
       "sha256": "",

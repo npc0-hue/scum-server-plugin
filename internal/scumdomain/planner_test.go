@@ -39,6 +39,18 @@ func TestBuildPlanMarksDatabaseOnlyPlayerDetail(t *testing.T) {
 	}
 }
 
+// TestBuildPlanCreatesMapTimelinePlan verifies the timeline route produces a bounded database-backed plan.
+// t is the Go test handle, and the function fails the test when map timeline misses route metadata.
+func TestBuildPlanCreatesMapTimelinePlan(t *testing.T) {
+	plan, errs := BuildPlan(PlanRequest{Method: "GET", Route: "map/timeline", ServerInstanceID: "si-1"})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected validation errors: %+v", errs)
+	}
+	if plan.Domain != "map" || plan.Permission != "scum.players.read" || plan.Capability != "db.query" {
+		t.Fatalf("unexpected timeline plan: %+v", plan)
+	}
+}
+
 // TestBuildPlanRequiresConfirmationForHighRiskRoutes verifies mutating routes require explicit confirmation.
 // t is the Go test handle, and the function fails the test when a high-risk task is accepted without confirmation.
 func TestBuildPlanRequiresConfirmationForHighRiskRoutes(t *testing.T) {

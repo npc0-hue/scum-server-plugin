@@ -63,6 +63,27 @@ func TestBuildPlanUsesTrajectoryRange(t *testing.T) {
 	}
 }
 
+// TestBuildPlanUsesSquadScopedTemplates verifies squad detail reads require squad identity and keep stable args.
+// t is the Go test handle, and the function fails the test when squad member or vehicle templates miss bounded identity parameters.
+func TestBuildPlanUsesSquadScopedTemplates(t *testing.T) {
+	for _, template := range []string{"squads.members", "squads.vehicles"} {
+		_, errs := BuildPlan(QueryRequest{ServerInstanceID: "si-1", Template: template}, false)
+		if len(errs) != 1 || errs[0].Code != "required" {
+			t.Fatalf("expected required error for %s, got %+v", template, errs)
+		}
+		plan, errs := BuildPlan(QueryRequest{ServerInstanceID: "si-1", Template: template, EntityID: "9", Limit: 25}, false)
+		if len(errs) != 0 {
+			t.Fatalf("unexpected validation errors for %s: %+v", template, errs)
+		}
+		if len(plan.Args) != 2 || plan.Args[0] != "9" || plan.Args[1] != 25 {
+			t.Fatalf("unexpected args for %s: %+v", template, plan.Args)
+		}
+		if !strings.Contains(plan.SQL, "squad") {
+			t.Fatalf("expected squad SQL for %s, got %s", template, plan.SQL)
+		}
+	}
+}
+
 // TestBuildPlanRejectsAdHocByDefault verifies production policy does not accept raw SQL.
 // t is the Go test handle, and the function fails the test when ad hoc SQL is accepted while disabled.
 func TestBuildPlanRejectsAdHocByDefault(t *testing.T) {

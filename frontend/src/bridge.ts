@@ -2,7 +2,7 @@ const protocol = 'scum.plugin.bridge'
 const version = '1'
 const sdkVersion = '0.1.0'
 
-type BridgeMessageType = 'plugin.handshake' | 'plugin.ready' | 'plugin.error' | 'plugin.height' | 'plugin.api.request' | 'host.context' | 'host.context.update' | 'host.api.response' | 'host.error'
+type BridgeMessageType = 'plugin.handshake' | 'plugin.ready' | 'plugin.error' | 'plugin.height' | 'plugin.navigate' | 'plugin.toolbar.update' | 'plugin.api.request' | 'host.context' | 'host.context.update' | 'host.toolbar.action' | 'host.api.response' | 'host.error'
 
 export interface BridgeContext {
   pluginId: string
@@ -10,6 +10,7 @@ export interface BridgeContext {
   pluginInstallationId: string
   routeKey: string
   routeSuffix?: string
+  routeQuery?: string
   apiBasePath: string
   serverInstanceId?: string
   locale: string
@@ -46,10 +47,48 @@ type PluginAPIError = Error & {
   code?: string
 }
 
+export type PluginToolbarOption = {
+  label: string
+  value: string
+}
+
+export type PluginToolbarControl = {
+  key: string
+  kind: 'select'
+  label: string
+  value?: string
+  disabled?: boolean
+  options?: PluginToolbarOption[]
+}
+
+export type PluginToolbarAction = {
+  key: string
+  label: string
+  disabled?: boolean
+}
+
+export type PluginToolbarState = {
+  visible: boolean
+  controls?: PluginToolbarControl[]
+  actions?: PluginToolbarAction[]
+}
+
+export type PluginToolbarActionPayload = {
+  kind?: 'change' | 'click'
+  key?: string
+  value?: string
+}
+
+export type PluginNavigateIntent = {
+  kind?: 'plugin-route'
+  target?: string
+}
+
 export class ScumPluginBridge {
   private contextValue: BridgeContext | null = null
   private readonly pending = new Map<string, PendingRequest>()
   private readonly contextListeners = new Set<(context: BridgeContext) => void>()
+  private readonly toolbarActionListeners = new Set<(payload: PluginToolbarActionPayload) => void>()
   private readonly nonce = new URL(window.location.href).searchParams.get('bridgeNonce') || ''
 
   constructor(
@@ -68,6 +107,11 @@ export class ScumPluginBridge {
       listener(this.contextValue)
     }
     return () => this.contextListeners.delete(listener)
+  }
+
+  onToolbarAction(listener: (payload: PluginToolbarActionPayload) => void) {
+    this.toolbarActionListeners.add(listener)
+    return () => this.toolbarActionListeners.delete(listener)
   }
 
   init() {
@@ -100,9 +144,13 @@ export class ScumPluginBridge {
     this.send('plugin.height', { height })
   }
 
-  api<TBody = unknown>(path: string, method = 'GET', body?: unknown) {
+  toolbar(state: PluginToolbarState) {
+    this.send('plugin.toolbar.update', state)
+  }
+
+  api<TBody = unknown>(path: string, method = 'GET', body?: unknown, query?: Record<string, unknown>) {
     const requestId = requestID('api')
-    this.send('plugin.api.request', { path, method, body }, requestId)
+    this.send('plugin.api.request', { path, method, body, query }, requestId)
     return new Promise<TBody>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId)
@@ -110,6 +158,10 @@ export class ScumPluginBridge {
       }, 10000)
       this.pending.set(requestId, { resolve: resolve as (value: unknown) => void, reject, timeout })
     })
+  }
+
+  navigate(intent: PluginNavigateIntent) {
+    this.send('plugin.navigate', intent)
   }
 
   private readonly handleMessage = (event: MessageEvent) => {
@@ -120,6 +172,10 @@ export class ScumPluginBridge {
     if (envelope.type === 'host.context' || envelope.type === 'host.context.update') {
       this.contextValue = envelope.payload as BridgeContext
       this.contextListeners.forEach((listener) => listener(this.contextValue as BridgeContext))
+      return
+    }
+    if (envelope.type === 'host.toolbar.action') {
+      this.toolbarActionListeners.forEach((listener) => listener(envelope.payload as PluginToolbarActionPayload))
       return
     }
     if (envelope.type === 'host.api.response') {

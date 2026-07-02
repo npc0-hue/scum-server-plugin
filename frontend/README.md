@@ -4,6 +4,12 @@ This directory owns SCUM-specific plugin UI, static assets, metadata, and bundle
 
 The platform shell may load the built `app.js` through Web Shell plugin metadata, but it must not copy SCUM configuration UI, images, game constants, spawn metadata, or map resources into `scum_web`.
 
+## Design contract
+
+This frontend follows the repository root `DESIGN.md`. The current `scum_web` platform shell is the visual source of truth: dark operations console surfaces, compact data-first layouts, token-backed translucent panels, 4-8px radii, and modal/drawer/routed details instead of fixed left-list/right-detail layouts.
+
+Plugin CSS should consume host-provided `themeTokens`, expose them through local `--plugin-*` aliases only for readability, and keep backgrounds transparent or token-backed so the platform skin and user backdrop remain coherent.
+
 ## Host bridge usage
 
 `src/bridge.ts` is a small plugin-side adapter for the `scum.plugin.bridge` protocol provided by `scum_web`. The plugin frontend:

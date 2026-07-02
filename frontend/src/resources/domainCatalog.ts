@@ -30,19 +30,19 @@ const unavailable = (capability: string, reasonCode: string, summary: string, ne
   nextAction
 })
 
-export const firstTrancheRouteKeys = ['settings', 'players', 'logs', 'update', 'tasks']
+export const firstTrancheRouteKeys = ['settings', 'players', 'trajectory-map', 'gifts', 'update', 'tasks']
 
 export const domainRoutes: DomainRoute[] = [
   {
     key: 'settings',
-    title: 'SCUM 配置',
+    title: '配置',
     path: '/settings',
     method: 'GET',
     apiPath: 'settings',
     permissions: ['scum.config.read'],
     capability: 'file.read',
     riskLevel: 'medium',
-    summary: '列出 WindowsServer 配置目录中的真实文件，并支持完整的 SCUM 常用配置文件读取。',
+    summary: '读取并编辑 ServerSettings.ini。',
     domainOwner: 'plugins/scum-admin/frontend',
     migrationStatus: 'migrated',
     visibility: 'normal',
@@ -70,13 +70,28 @@ export const domainRoutes: DomainRoute[] = [
     method: 'GET',
     apiPath: 'players',
     permissions: ['scum.players.read'],
-    capability: 'db.query',
+    capability: 'local.players.read',
     riskLevel: 'medium',
     summary: '玩家列表、搜索、登录历史和权限感知操作入口。',
     domainOwner: 'plugins/scum-admin/frontend',
     migrationStatus: 'migrated',
     visibility: 'normal',
-    unavailable: unavailable('db.query', 'database_capability_unavailable', '玩家数据需要绑定执行端提供只读数据库能力。')
+    unavailable: unavailable('local.players.read', 'local_player_database_unavailable', '玩家数据需要平台本地玩家库可用。')
+  },
+  {
+    key: 'trajectory-map',
+    title: '轨迹地图',
+    path: '/trajectory-map',
+    method: 'GET',
+    apiPath: 'map/timeline',
+    permissions: ['scum.players.read', 'scum.vehicles.read'],
+    capability: 'db.query',
+    riskLevel: 'medium',
+    summary: '查看玩家轨迹，并按时间切片查看载具和物资状态。',
+    domainOwner: 'plugins/scum-admin/frontend',
+    migrationStatus: 'migrated',
+    visibility: 'normal',
+    unavailable: unavailable('db.query', 'map_timeline_unavailable', '轨迹地图需要绑定执行端或平台本地数据源提供时间线查询能力。')
   },
   {
     key: 'vehicles',
@@ -134,9 +149,9 @@ export const domainRoutes: DomainRoute[] = [
     riskLevel: 'medium',
     summary: '礼包规则、发放记录和统计。',
     domainOwner: 'plugins/scum-admin/frontend',
-    migrationStatus: 'not_migrated',
-    visibility: 'direct',
-    unavailable: unavailable('task.query', 'not_migrated', '礼包管理需要完整发放和审计链路，当前批次暂不开放。')
+    migrationStatus: 'migrated',
+    visibility: 'normal',
+    unavailable: unavailable('task.query', 'gift_management_unavailable', '礼包管理需要任务查询和本地礼包配置能力可用。')
   },
   {
     key: 'events',
@@ -177,10 +192,10 @@ export const domainRoutes: DomainRoute[] = [
     permissions: ['scum.logs.read'],
     capability: 'file.read',
     riskLevel: 'medium',
-    summary: '列出 SCUM 日志目录中的真实文件，并按受控上限读取最新内容。',
+    summary: '通过配置页切换到日志目录查看日志文件。',
     domainOwner: 'plugins/scum-admin/frontend',
     migrationStatus: 'migrated',
-    visibility: 'normal',
+    visibility: 'direct',
     unavailable: unavailable('file.read', 'file_capability_unavailable', '日志读取需要绑定执行端提供文件目录与文件读取能力。')
   },
   {

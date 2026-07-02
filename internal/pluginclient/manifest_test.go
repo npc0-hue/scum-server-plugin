@@ -44,7 +44,7 @@ func TestManifestDeclaresPluginOwnedFrontendRoutes(t *testing.T) {
 	frontend, _ := manifest["frontend"].(map[string]any)
 	menus := keyedObjects(t, frontend["menus"])
 	routes := keyedObjects(t, frontend["routes"])
-	for _, key := range []string{"settings", "database", "players", "vehicles", "territories", "locks", "gifts", "events", "economy", "logs", "steam", "update", "tasks"} {
+	for _, key := range []string{"settings", "database", "players", "trajectory-map", "vehicles", "territories", "locks", "gifts", "events", "economy", "logs", "steam", "update", "tasks"} {
 		route, ok := routes[key]
 		if !ok {
 			t.Fatalf("manifest missing frontend route %s", key)
@@ -56,7 +56,7 @@ func TestManifestDeclaresPluginOwnedFrontendRoutes(t *testing.T) {
 			t.Fatalf("route %s must declare migration status and owner, got %+v", key, route)
 		}
 	}
-	for _, key := range []string{"settings", "players", "logs", "update", "tasks"} {
+	for _, key := range []string{"settings", "players", "trajectory-map", "gifts", "update", "tasks"} {
 		if _, ok := menus[key]; !ok {
 			t.Fatalf("manifest missing first-tranche menu %s", key)
 		}
@@ -64,7 +64,13 @@ func TestManifestDeclaresPluginOwnedFrontendRoutes(t *testing.T) {
 			t.Fatalf("first-tranche route %s must be normal migrated, got %+v", key, routes[key])
 		}
 	}
-	for _, key := range []string{"vehicles", "territories", "locks", "gifts", "events", "economy", "steam"} {
+	if _, ok := menus["logs"]; ok {
+		t.Fatalf("logs must not be advertised as a normal menu once merged into settings, got %+v", menus["logs"])
+	}
+	if routes["logs"]["visibility"] != "direct" {
+		t.Fatalf("logs route should remain direct-only after merging into settings, got %+v", routes["logs"])
+	}
+	for _, key := range []string{"vehicles", "territories", "locks", "events", "economy", "steam"} {
 		if _, ok := menus[key]; ok {
 			t.Fatalf("not-migrated route %s must not be advertised as a normal menu", key)
 		}

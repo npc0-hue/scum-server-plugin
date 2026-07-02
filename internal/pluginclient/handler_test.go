@@ -73,6 +73,13 @@ func TestHandlerBuildsLogsReadMetadata(t *testing.T) {
 	if !ok || len(workspaces) == 0 {
 		t.Fatalf("expected log workspaces, got %+v", data)
 	}
+	structuredFields, exists := data["structuredFields"]
+	if exists && structuredFields != nil {
+		t.Fatalf("expected logs metadata to omit structured fields, got %+v", data)
+	}
+	if data["structuredPath"] != "SCUM/Saved/Config/WindowsServer/ServerSettings.ini" {
+		t.Fatalf("expected logs metadata to keep canonical structured path, got %+v", data)
+	}
 }
 
 // TestHandlerBuildsDomainReadPlan verifies a SCUM domain read route returns a stable unavailable envelope with dispatch metadata.
@@ -147,6 +154,60 @@ func TestHandlerBuildsPlayerDetailPlan(t *testing.T) {
 	}
 }
 
+// TestHandlerBuildsTrajectoryMapPlan verifies the map timeline route returns a map placeholder with dispatch metadata.
+// t is the Go test handle, and the function fails the test when the route lacks grouped layer placeholder data.
+func TestHandlerBuildsTrajectoryMapPlan(t *testing.T) {
+	handler := NewHandler(false)
+	response := handler.Handle(command(http.MethodGet, "/map/timeline", nil))
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected ok response, got %+v", response)
+	}
+	var envelope DomainAPIResponse
+	if err := json.Unmarshal(response.Body, &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	data, ok := envelope.Data.(map[string]any)
+	if !ok || data["view"] != "map" {
+		t.Fatalf("expected map placeholder, got %+v", envelope.Data)
+	}
+	layers, ok := data["layers"].(map[string]any)
+	if !ok || layers["players"] == nil || layers["vehicles"] == nil || layers["supplies"] == nil {
+		t.Fatalf("expected grouped layer placeholder, got %+v", data)
+	}
+}
+
+// TestHandlerBuildsSquadDetailPlans verifies squad detail routes expose list placeholders and database templates.
+// t is the Go test handle, and the function fails the test when members or vehicles routes lack template metadata.
+func TestHandlerBuildsSquadDetailPlans(t *testing.T) {
+	handler := NewHandler(false)
+	for _, route := range []string{"/squads/members", "/squads/vehicles"} {
+		response := handler.Handle(commandWithQuery(http.MethodGet, route, nil, map[string][]string{"squadId": {"9"}}))
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("expected ok response for %s, got %+v", route, response)
+		}
+		var envelope DomainAPIResponse
+		if err := json.Unmarshal(response.Body, &envelope); err != nil {
+			t.Fatalf("decode response for %s: %v", route, err)
+		}
+		if envelope.DispatchPlan == nil || envelope.DispatchPlan.Capability != "db.query" {
+			t.Fatalf("expected db.query dispatch for %s, got %+v", route, envelope)
+		}
+		payloadBytes, _ := json.Marshal(envelope.DispatchPlan.Payload)
+		var payload scumdomain.CapabilityPlan
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			t.Fatalf("decode domain plan for %s: %v", route, err)
+		}
+		queryPlan, ok := payload.Payload["queryPlan"].(map[string]any)
+		if !ok || queryPlan["template"] == "" {
+			t.Fatalf("unexpected query plan for %s: %+v", route, payload.Payload)
+		}
+		data, ok := envelope.Data.(map[string]any)
+		if !ok || data["view"] != "list" {
+			t.Fatalf("expected list placeholder for %s, got %+v", route, envelope.Data)
+		}
+	}
+}
+
 // TestHandlerRejectsHighRiskDomainMutationWithoutConfirmation verifies high-risk plans require confirmation.
 // t is the Go test handle, and the function fails the test when a mutating route can dispatch silently.
 func TestHandlerRejectsHighRiskDomainMutationWithoutConfirmation(t *testing.T) {
@@ -201,8 +262,8 @@ func TestHandlerBuildsSettingsPatchPlan(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{
 		"expectedChecksum": "sha256:old",
 		"changes": []map[string]any{{
-			"section": "SCUM.Server",
-			"key":     "MaxPlayers",
+			"section": "General",
+			"key":     "scum.MaxPlayers",
 			"value":   "128",
 		}},
 	})
@@ -217,6 +278,40 @@ func TestHandlerBuildsSettingsPatchPlan(t *testing.T) {
 	}
 	if envelope.Kind != "operation_handle" || envelope.DispatchPlan == nil || envelope.DispatchPlan.Capability != "file.patch" {
 		t.Fatalf("unexpected operation envelope: %+v", envelope)
+	}
+}
+
+// TestHandlerBuildsSettingsPatchPlanFromLegacyAlias verifies legacy quick-edit aliases still normalize to the canonical ServerSettings.ini key.
+// t is the Go test handle, and the function fails the test when historical aliases no longer produce a valid patch plan.
+func TestHandlerBuildsSettingsPatchPlanFromLegacyAlias(t *testing.T) {
+	body, _ := json.Marshal(map[string]any{
+		"expectedChecksum": "sha256:old",
+		"changes": []map[string]any{{
+			"section": "SCUM.Server",
+			"key":     "MaxPlayers",
+			"value":   "128",
+		}},
+	})
+	handler := NewHandler(false)
+	response := handler.Handle(command(http.MethodPatch, "/settings", body))
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("expected accepted response, got %+v", response)
+	}
+	var envelope DomainAPIResponse
+	if err := json.Unmarshal(response.Body, &envelope); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	payload, ok := envelope.DispatchPlan.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("expected object payload, got %+v", envelope.DispatchPlan.Payload)
+	}
+	changes, ok := payload["changes"].([]any)
+	if !ok || len(changes) != 1 {
+		t.Fatalf("expected normalized change payload, got %+v", payload)
+	}
+	change, ok := changes[0].(map[string]any)
+	if !ok || change["section"] != "General" || change["key"] != "scum.MaxPlayers" {
+		t.Fatalf("expected canonical change payload, got %+v", change)
 	}
 }
 

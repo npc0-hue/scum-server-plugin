@@ -141,9 +141,10 @@ func (h Handler) handleSettingsRead(command APICommand) APICommandResponse {
 	if instanceID == "" {
 		return pluginError(command, http.StatusBadRequest, "missing_instance", "server instance context is required", nil)
 	}
-	body := domainResult(command, "settings", "settings", "SCUM 配置", "读取实例配置目录中的真实文件，并支持完整的 SCUM 常用配置文件集合。", instanceID, "scum.config.read", "file.read", map[string]any{
-		"workspaces":       scumfiles.ConfigWorkspaces(),
+	body := domainResult(command, "settings", "settings", "配置", "", instanceID, "scum.config.read", "file.read", map[string]any{
+		"workspaces":       scumfiles.BrowseWorkspaces(),
 		"supportedFiles":   scumfiles.SupportedConfigFiles(),
+		"fileDescriptions": scumfiles.ConfigFileDescriptions(),
 		"structuredFields": scumconfig.FieldDefinitions(),
 		"structuredPath":   scumconfig.SettingsPath,
 	}, nil)
@@ -157,8 +158,11 @@ func (h Handler) handleLogsRead(command APICommand) APICommandResponse {
 	if instanceID == "" {
 		return pluginError(command, http.StatusBadRequest, "missing_instance", "server instance context is required", nil)
 	}
-	body := domainResult(command, "logs", "logs", "日志", "读取实例日志目录中的真实文件，并优先展示常见 SCUM 游戏日志。", instanceID, "scum.logs.read", "file.read", map[string]any{
-		"workspaces": scumfiles.LogWorkspaces(),
+	body := domainResult(command, "logs", "logs", "日志", "", instanceID, "scum.logs.read", "file.read", map[string]any{
+		"workspaces":       scumfiles.BrowseWorkspaces(),
+		"supportedFiles":   scumfiles.SupportedConfigFiles(),
+		"fileDescriptions": scumfiles.ConfigFileDescriptions(),
+		"structuredPath":   scumconfig.SettingsPath,
 	}, nil)
 	return jsonResponse(command, http.StatusOK, body)
 }
@@ -182,7 +186,7 @@ func (h Handler) handleSettingsPatch(command APICommand) APICommandResponse {
 		Operation:  "patch",
 		Payload:    plan,
 	}
-	body := operationResponse(command, "settings", "settings", "SCUM 配置", "提交 ServerSettings.ini 配置修改。", request.ServerInstanceID, "scum.config.patch", "file.patch", "settings.patch", "SCUM 配置修改已提交至受控文件能力。", &planResponse)
+	body := operationResponse(command, "settings", "settings", "配置", "提交 ServerSettings.ini 配置修改。", request.ServerInstanceID, "scum.config.patch", "file.patch", "settings.patch", "配置修改已提交至受控文件能力。", &planResponse)
 	return jsonResponse(command, http.StatusAccepted, body)
 }
 
@@ -283,9 +287,19 @@ func readRoutePlaceholder(spec scumdomain.RouteSpec, plan scumdomain.CapabilityP
 	switch spec.Route {
 	case "players":
 		placeholder["view"] = "table"
+	case "map/timeline":
+		placeholder["view"] = "map"
+		placeholder["layers"] = map[string]any{
+			"players":   []map[string]any{},
+			"vehicles":  []map[string]any{},
+			"supplies":  []map[string]any{},
+			"focus":     "players",
+			"startTime": 0,
+			"endTime":   0,
+		}
 	case "players/detail", "players/assets":
 		placeholder["view"] = "detail"
-	case "players/login-history", "players/duplicate-ip", "players/skills", "players/trajectory", "vehicles", "vehicles/detail", "territories", "squads", "locks", "locks/records":
+	case "players/login-history", "players/duplicate-ip", "players/skills", "players/trajectory", "vehicles", "vehicles/detail", "territories", "squads", "squads/members", "squads/vehicles", "locks", "locks/records", "gifts", "gifts/detail", "gifts/stats", "gifts/dispatch-records":
 		placeholder["view"] = "list"
 	}
 	return placeholder

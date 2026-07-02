@@ -1,8 +1,18 @@
-import { ScumPluginBridge, type BridgeContext } from './bridge'
+import { ScumPluginBridge, type BridgeContext, type PluginToolbarActionPayload } from './bridge'
 import { domainRoutes, normalToolRoutes, routeFor, type DomainRoute } from './resources/domainCatalog'
+import {
+  buildFileSelectOptions,
+  fileNameFromPath,
+  filterFileEntriesByQuery,
+  normalizeRelativePath,
+  prioritizeFiles,
+  type FileListEntry
+} from './fileSelect'
+// @ts-expect-error shared JS localization catalog is exercised by node-based frontend tests.
+import { localizeSettingKey } from './resources/settingLocalization.js'
 
 const scumAdminPluginID = 'scum-admin'
-const scumAdminFallbackPluginVersion = '0.1.13'
+const scumAdminFallbackPluginVersion = '0.1.18'
 
 type PluginEnvelope = {
   kind?: 'domain_result' | 'operation_handle' | 'unavailable'
@@ -39,11 +49,18 @@ type RenderState = {
   bridge: ScumPluginBridge
   context: BridgeContext | null
   route: DomainRoute
+  routeRenderVersion: number
   content: HTMLElement
-  status: HTMLElement
   nav: HTMLElement
   settingsViewMode: 'structured' | 'raw'
   settingsModeTouched: boolean
+  preferredSettingsWorkspaceKey: string
+  preferredSettingsFileByWorkspace: Record<string, string>
+  settingsWorkspaceLoadVersion: number
+  settingsFileLoadVersion: number
+  settingsDirectoryEntriesByWorkspace: Record<string, FileListEntry[]>
+  settingsSearchQueryByWorkspace: Record<string, string>
+  playerDetailRow: Record<string, unknown> | null
 }
 
 const pluginVersionFromAssetURL = (locationHref: string) => {
@@ -68,12 +85,12 @@ type ConfigWorkspace = {
   summary?: string
 }
 
-type LogWorkspace = {
+type FileDescriptionMap = Record<string, string>
+
+type SettingsWorkspaceOption = {
   key: string
   title: string
-  directoryPath: string
-  preferredFiles?: string[]
-  summary?: string
+  routeKey: 'settings' | 'logs'
 }
 
 type StructuredField = {
@@ -81,20 +98,15 @@ type StructuredField = {
   key: string
   label: string
   validator: string
+  sectionLabel?: string
+  type?: 'string' | 'integer' | 'float' | 'boolean'
   sensitive?: boolean
 }
 
 type ResolvedStructuredField = StructuredField & {
   value: string
+  controlType: 'text' | 'number' | 'boolean' | 'password'
   editable?: boolean
-}
-
-type FileListEntry = {
-  name: string
-  relativePath: string
-  directory?: boolean
-  sizeBytes?: number
-  modifiedAt?: string
 }
 
 type CoreFileOperation = {
@@ -109,10 +121,52 @@ type CoreFileDispatchResponse = {
   operation: CoreFileOperation
 }
 
-const sampleStructuredFields: StructuredField[] = [
-  { section: 'SCUM.Server', key: 'MaxPlayers', label: '最大玩家数', validator: '1-256' },
-  { section: 'SCUM.Server', key: 'ServerName', label: '服务器名称', validator: '1-128 字符' }
+type PlayerActionDialogMode = 'send-item' | 'send-gift'
+
+type TerritoryViewMode = 'territories' | 'squads'
+
+type RouteQueryState = {
+  focus: 'players' | 'vehicles' | 'supplies'
+  playerIds: string[]
+  startTime: string
+  endTime: string
+}
+
+type GiftStatSummary = {
+  totalGifts?: number
+  activeGifts?: number
+  totalDispatches?: number
+  todayDispatches?: number
+}
+
+const sampleStructuredFields: StructuredField[] = []
+
+const settingsSectionLabels: Record<string, string> = {
+  General: '基础配置',
+  World: '世界配置',
+  Respawn: '重生配置',
+  Economy: '经济配置',
+  Vehicles: '载具配置',
+  Damage: '伤害配置',
+  Features: '功能配置',
+}
+
+const settingsSectionHints: Record<string, string> = {
+  General: '服务器名称、人数、视角和基础玩法。',
+  World: '僵尸、刷新、世界资源和环境倍率。',
+  Respawn: '角色重生、出生和惩罚相关规则。',
+  Economy: '交易、物价和经济循环参数。',
+  Vehicles: '载具刷新、数量和使用限制。',
+  Damage: '伤害、掉血和战斗相关参数。',
+  Features: '建家、资源刷新、技能成长和袭击保护等功能规则。',
+}
+
+const settingsWorkspaceOptions: SettingsWorkspaceOption[] = [
+  { key: 'windows-server', title: 'WindowsServer 配置', routeKey: 'settings' },
+  { key: 'game-logs', title: '游戏日志', routeKey: 'logs' },
 ]
+
+const defaultLogFileDescription = '日志文件，用于查看服务器运行、聊天、经济和事件记录。'
 
 const emptyEnvelope = (route: DomainRoute, state: PluginEnvelope['state'] = 'unavailable'): PluginEnvelope => ({
   kind: 'unavailable',
@@ -153,9 +207,9 @@ const pluginSkin = `
     --plugin-warning: var(--plugin-theme-warning-color, #ffb020);
     --plugin-error: var(--plugin-theme-error-color, #f23f42);
     --plugin-bg: var(--plugin-theme-app-bg-color, #101014);
-    --plugin-panel: var(--plugin-theme-panel-bg-color, rgba(23, 27, 36, 0.78));
-    --plugin-panel-strong: var(--plugin-theme-panel-strong-bg-color, rgba(21, 25, 34, 0.96));
-    --plugin-panel-soft: var(--plugin-theme-hover-color, rgba(255, 255, 255, 0.045));
+    --plugin-panel: var(--plugin-theme-panel-bg-color, rgba(23, 27, 36, 0.48));
+    --plugin-panel-strong: var(--plugin-theme-panel-strong-bg-color, rgba(21, 25, 34, 0.62));
+    --plugin-panel-soft: color-mix(in srgb, var(--plugin-theme-hover-color, rgba(255, 255, 255, 0.045)) 88%, transparent);
     --plugin-border: var(--plugin-theme-border-color, rgba(255, 255, 255, 0.12));
     --plugin-border-strong: rgba(255, 255, 255, 0.18);
     --plugin-text: var(--plugin-theme-text-color, #f4f4f5);
@@ -163,11 +217,11 @@ const pluginSkin = `
     --plugin-muted: var(--plugin-theme-muted-text-color, #a1a1aa);
     --plugin-control: var(--plugin-theme-control-bg-color, rgba(16, 16, 20, 0.78));
     --plugin-control-focus: var(--plugin-theme-control-focus-bg-color, rgba(16, 16, 20, 0.92));
-    --plugin-shadow: 0 20px 48px rgba(0, 0, 0, 0.22);
-    --plugin-shadow-soft: 0 16px 36px rgba(0, 0, 0, 0.16);
+    --plugin-shadow: 0 18px 38px rgba(0, 0, 0, 0.14);
+    --plugin-shadow-soft: 0 12px 28px rgba(0, 0, 0, 0.1);
     --plugin-workspace-bg-image: none;
     min-height: 100%;
-    padding: 24px;
+    padding: 0;
     color: var(--plugin-text);
     background: transparent;
     font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -187,10 +241,11 @@ const pluginSkin = `
     background-repeat: no-repeat;
     background-size: cover;
     transition: opacity 0.2s ease;
+    filter: saturate(0.82) blur(1px);
   }
 
   .scum-admin-plugin.has-backdrop::before {
-    opacity: 1;
+    opacity: 0.34;
   }
 
   .scum-admin-plugin > * {
@@ -205,80 +260,50 @@ const pluginSkin = `
     content: "";
     z-index: 0;
     background:
-      linear-gradient(180deg, rgba(5, 7, 12, 0.38), rgba(5, 7, 12, 0.58)),
-      linear-gradient(135deg, color-mix(in srgb, var(--plugin-primary) 20%, transparent), transparent 42%, color-mix(in srgb, var(--plugin-info) 14%, transparent));
-  }
-
-  .scum-admin-header {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    align-items: flex-start;
-    padding: 18px 20px;
-    border: 1px solid var(--plugin-border-strong);
-    border-radius: 18px;
-    background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.03)),
-      color-mix(in srgb, var(--plugin-panel-strong) 88%, transparent);
-    backdrop-filter: blur(22px) saturate(1.22);
-    -webkit-backdrop-filter: blur(22px) saturate(1.22);
-    box-shadow: var(--plugin-shadow-soft);
-  }
-
-  .scum-admin-header h1 {
-    margin: 0;
-    color: var(--plugin-text-strong);
-    font-size: 24px;
-    font-weight: 720;
-  }
-
-  .scum-admin-header p {
-    max-width: 760px;
-  }
-
-  .scum-admin-status {
-    margin: 6px 0 0;
-    color: var(--plugin-muted);
-    line-height: 1.5;
+      linear-gradient(180deg, rgba(5, 7, 12, 0.56), rgba(5, 7, 12, 0.78)),
+      linear-gradient(135deg, color-mix(in srgb, var(--plugin-primary) 16%, transparent), transparent 38%, color-mix(in srgb, var(--plugin-info) 12%, transparent)),
+      radial-gradient(circle at top center, rgba(255, 255, 255, 0.08), transparent 52%);
   }
 
   .scum-admin-tabs {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin: 18px 0;
-    padding: 6px;
+    display: grid;
+    gap: 6px;
+    align-content: start;
+    margin: 0;
+    padding: 8px;
     border: 1px solid var(--plugin-border);
     border-radius: 16px;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
-      color-mix(in srgb, var(--plugin-panel) 88%, transparent);
-    backdrop-filter: blur(18px) saturate(1.18);
-    -webkit-backdrop-filter: blur(18px) saturate(1.18);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
+      color-mix(in srgb, var(--plugin-panel) 72%, transparent);
+    backdrop-filter: blur(16px) saturate(1.12);
+    -webkit-backdrop-filter: blur(16px) saturate(1.12);
   }
 
   .scum-admin-tabs button {
+    width: 100%;
     min-height: 38px;
-    padding: 8px 12px;
-    border: 1px solid var(--plugin-border);
-    border-radius: 12px;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: 10px;
     color: #d4d4d8;
-    background: var(--plugin-control);
+    background: transparent;
     cursor: pointer;
     font: inherit;
     letter-spacing: 0;
+    text-align: left;
   }
 
   .scum-admin-tabs button:hover {
-    border-color: color-mix(in srgb, var(--plugin-primary) 45%, transparent);
+    border-color: color-mix(in srgb, var(--plugin-primary) 28%, transparent);
     color: #ffffff;
-    background: var(--plugin-panel-soft);
+    background: color-mix(in srgb, var(--plugin-panel-soft) 90%, transparent);
   }
 
   .scum-admin-tabs button[aria-current="page"] {
-    border-color: color-mix(in srgb, var(--plugin-primary) 55%, transparent);
+    border-color: color-mix(in srgb, var(--plugin-primary) 40%, transparent);
     color: #ffffff;
-    background: color-mix(in srgb, var(--plugin-primary) 16%, transparent);
+    background: color-mix(in srgb, var(--plugin-primary) 20%, transparent);
   }
 
   .scum-admin-tabs button[data-status="not_migrated"],
@@ -287,23 +312,98 @@ const pluginSkin = `
   }
 
   .route-surface {
+    min-width: 0;
     padding: 0;
     border: 0;
     background: transparent;
   }
 
+  .scum-admin-layout {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+
+  .scum-admin-sidebar {
+    position: sticky;
+    top: 0;
+    min-width: 0;
+  }
+
   .route-shell {
     display: grid;
     gap: 18px;
-    padding: 22px;
+    padding: 18px;
+    border: 1px solid var(--plugin-border-strong);
+    border-radius: 20px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018)),
+      color-mix(in srgb, var(--plugin-panel-strong) 72%, transparent);
+    backdrop-filter: blur(18px) saturate(1.14);
+    -webkit-backdrop-filter: blur(18px) saturate(1.14);
+    box-shadow: var(--plugin-shadow);
+  }
+
+  .route-shell--settings {
+    gap: 16px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+  }
+
+  .settings-page-header {
+    display: grid;
+    gap: 12px;
+    padding: 22px 24px;
     border: 1px solid var(--plugin-border-strong);
     border-radius: 24px;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.025)),
-      color-mix(in srgb, var(--plugin-panel-strong) 90%, transparent);
-    backdrop-filter: blur(22px) saturate(1.2);
-    -webkit-backdrop-filter: blur(22px) saturate(1.2);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025)),
+      color-mix(in srgb, var(--plugin-panel-strong) 88%, rgba(8, 10, 18, 0.92));
+    backdrop-filter: blur(22px) saturate(1.08);
+    -webkit-backdrop-filter: blur(22px) saturate(1.08);
     box-shadow: var(--plugin-shadow);
+  }
+
+  .settings-page-header-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+
+  .settings-page-header h2 {
+    margin: 0;
+    color: var(--plugin-text-strong);
+    font-size: clamp(24px, 3vw, 32px);
+    font-weight: 760;
+    letter-spacing: -0.02em;
+  }
+
+  .settings-page-header p {
+    margin: 0;
+    max-width: 720px;
+    color: color-mix(in srgb, var(--plugin-text) 78%, var(--plugin-muted));
+    line-height: 1.62;
+  }
+
+  .settings-page-header-note {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: fit-content;
+    min-height: 36px;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 999px;
+    color: var(--plugin-muted);
+    background: rgba(8, 12, 20, 0.52);
+    font-size: 13px;
   }
 
   .surface-body {
@@ -349,23 +449,6 @@ const pluginSkin = `
     white-space: nowrap;
   }
 
-  .surface-eyebrow {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--plugin-muted);
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .surface-eyebrow::before {
-    width: 28px;
-    height: 1px;
-    background: color-mix(in srgb, var(--plugin-primary) 54%, transparent);
-    content: "";
-  }
-
   .status-pill[data-tone="ok"] {
     border-color: rgba(54, 173, 106, 0.5);
     color: #9ae6b4;
@@ -400,7 +483,8 @@ const pluginSkin = `
 
   .controls input,
   .controls select,
-  .field-grid input {
+  .field-grid input,
+  .field-grid select {
     min-height: 36px;
     padding: 8px 9px;
     border: 1px solid rgba(255, 255, 255, 0.14);
@@ -414,7 +498,8 @@ const pluginSkin = `
 
   .controls input:focus,
   .controls select:focus,
-  .field-grid input:focus {
+  .field-grid input:focus,
+  .field-grid select:focus {
     border-color: var(--plugin-primary);
     background: var(--plugin-control-focus);
   }
@@ -495,15 +580,17 @@ const pluginSkin = `
   }
 
   .meta-grid--compact {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   }
 
   .meta-item {
     min-width: 0;
-    padding: 10px;
-    border: 1px solid var(--plugin-border);
-    border-radius: 6px;
-    background: var(--plugin-panel-soft);
+    padding: 12px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+    background: rgba(9, 13, 21, 0.72);
+    backdrop-filter: blur(14px) saturate(1.08);
+    -webkit-backdrop-filter: blur(14px) saturate(1.08);
   }
 
   .meta-item strong {
@@ -519,37 +606,24 @@ const pluginSkin = `
     word-break: break-word;
   }
 
-  .workspace-grid {
-    display: grid;
-    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
-    gap: 16px;
-    align-items: start;
-  }
-
-  .workspace-sidebar,
-  .workspace-main {
-    display: grid;
-    gap: 16px;
-  }
-
   .workspace-card {
     display: grid;
-    gap: 14px;
-    padding: 18px;
+    gap: 12px;
+    padding: 16px;
     border: 1px solid var(--plugin-border-strong);
-    border-radius: 18px;
+    border-radius: 16px;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.025)),
-      color-mix(in srgb, var(--plugin-panel) 90%, transparent);
-    backdrop-filter: blur(18px) saturate(1.16);
-    -webkit-backdrop-filter: blur(18px) saturate(1.16);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+      color-mix(in srgb, var(--plugin-panel) 76%, transparent);
+    backdrop-filter: blur(16px) saturate(1.12);
+    -webkit-backdrop-filter: blur(16px) saturate(1.12);
     box-shadow: var(--plugin-shadow-soft);
   }
 
   .workspace-card--primary {
     background:
-      linear-gradient(180deg, color-mix(in srgb, var(--plugin-primary) 16%, rgba(255, 255, 255, 0.08)), rgba(255, 255, 255, 0.025)),
-      color-mix(in srgb, var(--plugin-panel) 90%, transparent);
+      linear-gradient(180deg, color-mix(in srgb, var(--plugin-primary) 12%, rgba(255, 255, 255, 0.07)), rgba(255, 255, 255, 0.02)),
+      color-mix(in srgb, var(--plugin-panel) 76%, transparent);
   }
 
   .workspace-card-heading {
@@ -565,50 +639,92 @@ const pluginSkin = `
   .workspace-card-heading p {
     margin: 0;
     color: var(--plugin-muted);
-    line-height: 1.6;
-  }
-
-  .workspace-card-heading .surface-eyebrow {
-    letter-spacing: 0.12em;
-  }
-
-  .workspace-hint {
-    display: grid;
-    gap: 8px;
-    color: var(--plugin-muted);
-    line-height: 1.55;
-  }
-
-  .workspace-hint strong {
-    color: var(--plugin-text-strong);
-    font-size: 14px;
+    line-height: 1.5;
   }
 
   .field-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    gap: 10px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
     margin: 0;
+  }
+
+  .field-section {
+    display: grid;
+    gap: 12px;
+  }
+
+  .field-section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: space-between;
+    min-width: 0;
+    padding: 2px 4px 0;
+  }
+
+  .field-section-head > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .field-section-head strong {
+    color: var(--plugin-text-strong);
+    font-size: 15px;
+  }
+
+  .field-section-head p {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .field-section-head span {
+    color: var(--plugin-muted);
+    font-size: 12px;
+    white-space: nowrap;
   }
 
   .field-grid label {
     display: grid;
-    gap: 6px;
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+    align-items: start;
+    gap: 14px;
     min-width: 0;
-    padding: 10px;
-    border: 1px solid var(--plugin-border);
-    border-radius: 6px;
+    padding: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 16px;
     color: var(--plugin-muted);
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
-      var(--plugin-panel);
-    backdrop-filter: blur(16px) saturate(1.18);
-    -webkit-backdrop-filter: blur(16px) saturate(1.18);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+      rgba(10, 14, 22, 0.78);
+    backdrop-filter: blur(16px) saturate(1.08);
+    -webkit-backdrop-filter: blur(16px) saturate(1.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .field-grid label[data-editable="false"] {
+    opacity: 0.72;
+  }
+
+  .settings-field-copy {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .settings-field-key {
+    color: var(--plugin-muted);
+    font-size: 12px;
+    word-break: break-word;
   }
 
   .field-grid strong {
-    color: var(--plugin-text);
-    font-size: 13px;
+    color: var(--plugin-text-strong);
+    font-size: 14px;
+    line-height: 1.4;
   }
 
   .field-grid span {
@@ -616,18 +732,50 @@ const pluginSkin = `
     font-size: 12px;
   }
 
+  .settings-field-control {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .settings-field-meta {
+    color: var(--plugin-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .settings-field-path {
+    color: rgba(255, 255, 255, 0.46);
+    font-size: 11px;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .field-grid input,
+  .field-grid select {
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(5, 8, 15, 0.9);
+  }
+
+  .field-grid select {
+    cursor: pointer;
+  }
+
   .settings-editor {
     display: grid;
-    gap: 10px;
+    gap: 14px;
     margin-top: 0;
-    padding: 18px;
+    padding: 20px;
     border: 1px solid var(--plugin-border-strong);
-    border-radius: 18px;
+    border-radius: 20px;
     background:
-      linear-gradient(180deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025)),
-      var(--plugin-panel);
-    backdrop-filter: blur(18px) saturate(1.2);
-    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+      rgba(9, 13, 21, 0.84);
+    backdrop-filter: blur(18px) saturate(1.08);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
     box-shadow: var(--plugin-shadow);
   }
 
@@ -653,11 +801,11 @@ const pluginSkin = `
     width: 100%;
     min-height: clamp(360px, 58vh, 760px);
     resize: vertical;
-    padding: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 6px;
+    padding: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
     color: #dbeafe;
-    background: rgba(6, 10, 20, 0.92);
+    background: rgba(3, 6, 12, 0.94);
     font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
     outline: none;
     white-space: pre;
@@ -706,49 +854,426 @@ const pluginSkin = `
     color: #ffffff;
   }
 
+  .segmented-control {
+    display: inline-flex;
+    gap: 6px;
+    width: fit-content;
+    padding: 4px;
+    border: 1px solid var(--plugin-border);
+    border-radius: 999px;
+    background: rgba(10, 14, 22, 0.38);
+  }
+
+  .segmented-control button {
+    min-height: 32px;
+    padding: 7px 12px;
+    border: 0;
+    border-radius: 999px;
+    color: var(--plugin-muted);
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+  }
+
+  .segmented-control button[aria-pressed="true"] {
+    color: #ffffff;
+    background: color-mix(in srgb, var(--plugin-primary) 18%, rgba(255, 255, 255, 0.08));
+  }
+
+  .segmented-control button:hover {
+    color: #ffffff;
+  }
+
+  .inline-dialog {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: none;
+    align-items: center;
+    justify-items: center;
+    padding: 18px;
+    background: rgba(3, 6, 12, 0.68);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
+  .inline-dialog:not(:empty) {
+    display: grid;
+  }
+
+  .inline-dialog-panel {
+    display: grid;
+    gap: 12px;
+    width: min(980px, calc(100vw - 36px));
+    max-height: calc(100vh - 36px);
+    overflow: auto;
+    padding: 16px;
+    border: 1px solid var(--plugin-border-strong);
+    border-radius: 16px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+      rgba(9, 13, 21, 0.96);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
+  }
+
+  .inline-dialog-table {
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  .inline-dialog-table table {
+    min-width: 680px;
+  }
+
+  .table-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
   .settings-save-status {
     color: var(--plugin-muted);
     font-size: 13px;
+    min-height: 18px;
   }
 
   .settings-frame {
     display: grid;
-    gap: 16px;
+    gap: 12px;
   }
 
-  .settings-structured-panel {
+  .settings-section {
     display: grid;
-    gap: 14px;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 18px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.018)),
+      rgba(11, 15, 24, 0.82);
+    backdrop-filter: blur(18px) saturate(1.08);
+    -webkit-backdrop-filter: blur(18px) saturate(1.08);
+    box-shadow: var(--plugin-shadow-soft);
   }
 
-  .settings-structured-header {
+  .settings-file-strip {
+    position: relative;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    overflow: visible;
+    padding: 8px;
+    border: 1px solid var(--plugin-border);
+    border-radius: 14px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+      rgba(8, 12, 20, 0.58);
+    backdrop-filter: blur(14px) saturate(1.12);
+    -webkit-backdrop-filter: blur(14px) saturate(1.12);
+  }
+
+  .settings-file-field {
+    display: grid;
+    gap: 3px;
+    min-width: 150px;
+    overflow: visible;
+    flex: 1 1 210px;
+  }
+
+  .settings-file-field span {
+    color: var(--plugin-muted);
+    font-size: 11px;
+    line-height: 1;
+  }
+
+  .settings-file-field input,
+  .settings-file-field select,
+  .settings-file-picker-trigger {
+    width: 100%;
+    min-height: 34px;
+    padding: 6px 28px 6px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    color: var(--plugin-text);
+    background: rgba(5, 9, 16, 0.72);
+    outline: none;
+  }
+
+  .settings-file-field input:focus,
+  .settings-file-field select:focus,
+  .settings-file-picker-trigger:focus {
+    border-color: var(--plugin-primary);
+  }
+
+  .settings-file-picker {
+    position: relative;
+    overflow: visible;
+  }
+
+  .settings-file-picker[open] {
+    z-index: 40;
+  }
+
+  .settings-file-picker-trigger {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .settings-file-picker-trigger::-webkit-details-marker {
+    display: none;
+  }
+
+  .settings-file-picker-panel {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 12px;
+    background: rgba(7, 11, 18, 0.96);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.35);
+    min-width: min(520px, calc(100vw - 48px));
+    max-width: min(680px, calc(100vw - 48px));
+    z-index: 60;
+  }
+
+  .settings-file-picker-options {
+    display: grid;
+    gap: 6px;
+    max-height: min(320px, 45vh);
+    overflow: auto;
+  }
+
+  .settings-file-picker-option {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    color: var(--plugin-text);
+    background: rgba(255, 255, 255, 0.03);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .settings-file-picker-option.is-active {
+    border-color: color-mix(in srgb, var(--plugin-primary) 72%, rgba(255, 255, 255, 0.14));
+    background: color-mix(in srgb, var(--plugin-primary) 18%, rgba(255, 255, 255, 0.04));
+  }
+
+  .settings-file-picker-empty {
+    padding: 8px 10px;
+    color: var(--plugin-muted);
+    font-size: 12px;
+  }
+
+  @media (max-width: 900px) {
+    .settings-file-picker-panel {
+      min-width: 100%;
+      max-width: 100%;
+    }
+  }
+
+  .settings-file-strip > button {
+    min-height: 34px;
+    white-space: nowrap;
+  }
+
+  .settings-host-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 36px;
+  }
+
+  .settings-host-strip .notice {
+    flex: 1 1 auto;
+  }
+
+  .settings-toolbar-head,
+  .settings-section-head {
     display: flex;
     justify-content: space-between;
-    gap: 12px;
     align-items: flex-start;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
-  .settings-structured-header p {
+  .settings-toolbar-head strong,
+  .settings-section-head strong {
+    color: var(--plugin-text-strong);
+    font-size: 15px;
+  }
+
+  .settings-toolbar-head p,
+  .settings-section-head p {
     margin: 6px 0 0;
     color: var(--plugin-muted);
+    font-size: 13px;
     line-height: 1.55;
   }
 
-  .settings-structured-header strong {
-    color: var(--plugin-text-strong);
-    font-size: 17px;
-  }
-
-  .settings-file-mark {
+  .settings-toolbar-meta {
     display: inline-flex;
     align-items: center;
     min-height: 28px;
     padding: 4px 10px;
-    border: 1px solid var(--plugin-border);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 999px;
     color: var(--plugin-muted);
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(255, 255, 255, 0.04);
     font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .settings-toolbar-grid {
+    display: grid;
+    gap: 8px;
+  }
+
+  .settings-toolbar-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .settings-toolbar-row--selectors > * {
+    flex: 1 1 180px;
+    min-width: 0;
+  }
+
+  .settings-toolbar-row--selectors .action-button {
+    flex: 0 0 auto;
+  }
+
+  .settings-select {
+    position: relative;
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+    padding: 8px 10px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 14px;
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018)),
+      rgba(8, 12, 20, 0.82);
+    backdrop-filter: blur(16px) saturate(1.08);
+    -webkit-backdrop-filter: blur(16px) saturate(1.08);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+
+  .settings-select-label {
+    color: var(--plugin-text-strong);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
+  }
+
+  .settings-select select {
+    width: 100%;
+    min-height: 40px;
+    padding: 9px 34px 9px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    color: var(--plugin-text-strong);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+      rgba(3, 6, 12, 0.88);
+    font: inherit;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  }
+
+  .settings-select select:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .settings-select select:focus {
+    border-color: color-mix(in srgb, var(--plugin-primary) 72%, white 8%);
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.02)),
+      rgba(4, 8, 16, 0.94);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--plugin-primary) 20%, transparent);
+  }
+
+  .settings-select select:disabled {
+    cursor: not-allowed;
+    opacity: 0.58;
+  }
+
+  .settings-select-caret {
+    position: absolute;
+    right: 14px;
+    bottom: 21px;
+    color: var(--plugin-muted);
+    font-size: 12px;
+    pointer-events: none;
+  }
+
+  .settings-toolbar-row--modes {
+    justify-content: flex-end;
+  }
+
+  .settings-toolbar-row--modes > * {
+    min-width: 0;
+  }
+
+  .settings-toolbar-tip {
+    color: var(--plugin-muted);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .settings-main {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    gap: 14px;
+  }
+
+  .settings-toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .settings-toolbar--minimal {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .settings-toolbar select {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .settings-structured-panel {
+    display: grid;
+    gap: 16px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .settings-structured-panel[hidden],
+  .settings-editor[hidden] {
+    display: none;
   }
 
   .diff-box,
@@ -835,26 +1360,62 @@ const pluginSkin = `
   }
 
   @media (max-width: 700px) {
-    .scum-admin-header,
+    .settings-page-header,
+    .settings-section,
+    .settings-editor {
+      padding: 16px;
+      border-radius: 18px;
+    }
+
+    .settings-page-header-top,
     .surface-title,
-    .settings-structured-header,
-    .settings-editor-header {
+    .settings-editor-header,
+    .settings-toolbar-head,
+    .settings-section-head,
+    .settings-toolbar-row--modes {
       display: grid;
     }
 
     .controls,
     .controls-stack,
-    .workspace-grid {
+    .settings-toolbar,
+    .settings-toolbar-row,
+    .settings-file-strip {
       display: grid;
     }
 
     .controls input,
     .controls select,
-    .controls button {
+    .controls button,
+    .settings-toolbar select,
+    .settings-toolbar button,
+    .settings-file-field,
+    .settings-file-strip button,
+    .settings-mode {
       width: 100%;
     }
 
-    .scum-admin-plugin,
+    .field-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .scum-admin-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .scum-admin-sidebar {
+      position: static;
+    }
+
+    .scum-admin-tabs {
+      display: flex;
+      flex-wrap: wrap;
+    }
+
+    .scum-admin-tabs button {
+      width: auto;
+    }
+
     .route-shell {
       padding: 16px;
     }
@@ -871,22 +1432,19 @@ export const mount = async () => {
     <style>
       ${pluginSkin}
     </style>
-    <header class="scum-admin-header">
-      <div>
-        <h1>SCUM 管理</h1>
-        <p class="scum-admin-status" data-role="status">正在通过 host bridge 初始化...</p>
-      </div>
-    </header>
-    <nav class="scum-admin-tabs" aria-label="SCUM 管理域" data-role="nav"></nav>
-    <section class="route-surface" data-role="content"></section>
+    <div class="scum-admin-layout">
+      <aside class="scum-admin-sidebar">
+        <nav class="scum-admin-tabs" aria-label="插件导航" data-role="nav"></nav>
+      </aside>
+      <section class="route-surface" data-role="content"></section>
+    </div>
   `
   root.appendChild(panel)
   bridge.onContext((context) => applyPluginTheme(panel, context))
 
-  const status = panel.querySelector<HTMLElement>('[data-role="status"]')
   const nav = panel.querySelector<HTMLElement>('[data-role="nav"]')
   const content = panel.querySelector<HTMLElement>('[data-role="content"]')
-  if (!status || !nav || !content) {
+  if (!nav || !content) {
     return
   }
 
@@ -894,13 +1452,21 @@ export const mount = async () => {
     bridge,
     context: null,
     route: routeFor(initialRoute),
+    routeRenderVersion: 0,
     content,
-    status,
     nav,
     settingsViewMode: 'structured',
-    settingsModeTouched: false
+    settingsModeTouched: false,
+    preferredSettingsWorkspaceKey: initialRoute === 'logs' ? 'game-logs' : 'windows-server',
+    preferredSettingsFileByWorkspace: {},
+    settingsWorkspaceLoadVersion: 0,
+    settingsFileLoadVersion: 0,
+    settingsDirectoryEntriesByWorkspace: {},
+    settingsSearchQueryByWorkspace: {},
+    playerDetailRow: null
   }
 
+  bridge.onToolbarAction((payload) => handleHostToolbarAction(renderState, payload))
   renderNav(renderState)
   renderShell(renderState, { state: 'loading', title: renderState.route.title, summary: renderState.route.summary })
 
@@ -908,14 +1474,11 @@ export const mount = async () => {
     const context = await bridge.init()
     renderState.context = context
     renderState.route = routeFor(context.routeKey || initialRoute)
-    status.textContent = `已连接 host bridge，当前实例：${context.serverInstanceId || '未选择'}`
     renderNav(renderState)
     await renderRoute(renderState, renderState.route.key)
     bridge.ready({ surface: renderState.route.key, routes: domainRoutes.map((route) => route.key) })
     bridge.height(document.documentElement.scrollHeight)
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    status.textContent = `host bridge 初始化失败：${message}`
     bridge.error(error)
   }
 }
@@ -951,15 +1514,28 @@ const renderNav = (state: RenderState) => {
 }
 
 const routeTabsFor = (route: DomainRoute) => {
+  if (route.key === 'logs') {
+    return normalToolRoutes.filter((item) => item.key !== 'logs')
+  }
   if (normalToolRoutes.some((item) => item.key === route.key)) {
     return normalToolRoutes
   }
   return [route, ...normalToolRoutes]
 }
 
-const renderRoute = async (state: RenderState, routeKey: string) => {
+const renderRoute = async (state: RenderState, routeKey: string, options: { syncWorkspace?: boolean } = {}) => {
+  const routeRenderVersion = state.routeRenderVersion + 1
+  state.routeRenderVersion = routeRenderVersion
+  state.settingsWorkspaceLoadVersion += 1
+  state.settingsFileLoadVersion += 1
   state.route = routeFor(routeKey)
+  if (options.syncWorkspace !== false) {
+    syncPreferredWorkspaceForRoute(state, state.route.key)
+  }
   renderNav(state)
+  if (state.route.key !== 'settings' && state.route.key !== 'logs') {
+    clearHostToolbar(state)
+  }
   renderShell(state, { state: 'loading', title: state.route.title, summary: state.route.summary })
   if (state.route.migrationStatus === 'not_migrated' || state.route.migrationStatus === 'deferred') {
     renderUnavailableRoute(state, emptyEnvelope(state.route, state.route.migrationStatus))
@@ -971,8 +1547,14 @@ const renderRoute = async (state: RenderState, routeKey: string) => {
   }
   try {
     const envelope = await state.bridge.api<PluginEnvelope>(pluginAPIPath(state.route.apiPath), state.route.method, requestBodyFor(state.route))
+    if (state.routeRenderVersion !== routeRenderVersion) {
+      return
+    }
     renderDomainPage(state, normalizeEnvelope(state.route, envelope))
   } catch (error) {
+    if (state.routeRenderVersion !== routeRenderVersion) {
+      return
+    }
     renderDomainPage(state, failedEnvelope(state.route, error))
   }
 }
@@ -982,19 +1564,19 @@ const pluginAPIPath = (apiPath: string) => `/api/plugins/scum-admin/${String(api
 const renderShell = (state: RenderState, envelope: PluginEnvelope) => {
   const route = state.route
   const tone = statusTone(envelope)
-  const summary = isUsable(envelope)
-    ? route.summary
-    : envelope.unavailable?.summary || route.unavailable.summary
-  state.content.innerHTML = `
-    <div class="route-shell">
+  const chrome = route.key === 'settings'
+    ? ''
+    : `
       <div class="surface-title">
         <div>
-          <span class="surface-eyebrow">${escapeHtml(route.domainOwner || 'plugin workspace')}</span>
           <h2>${escapeHtml(route.title)}</h2>
-          <p>${escapeHtml(summary)}</p>
         </div>
         <span class="status-pill" data-tone="${tone}">${statusText(route, envelope)}</span>
       </div>
+    `
+  state.content.innerHTML = `
+    <div class="route-shell${route.key === 'settings' ? ' route-shell--settings' : ''}">
+      ${chrome}
       <div data-role="route-body"><div class="empty">正在加载 ${escapeHtml(route.title)}...</div></div>
     </div>
   `
@@ -1007,6 +1589,12 @@ const renderDomainPage = (state: RenderState, envelope: PluginEnvelope) => {
       return
     case 'players':
       renderPlayersPage(state, envelope)
+      return
+    case 'trajectory-map':
+      renderTrajectoryMapPage(state, envelope)
+      return
+    case 'gifts':
+      void renderGiftsPage(state, envelope)
       return
     case 'vehicles':
       renderCollectionPage(state, envelope, {
@@ -1022,17 +1610,7 @@ const renderDomainPage = (state: RenderState, envelope: PluginEnvelope) => {
       })
       return
     case 'territories':
-      renderCollectionPage(state, envelope, {
-        empty: '暂无领地或小队数据。',
-        columns: [
-          { key: 'territoryId', label: '领地 ID' },
-          { key: 'ownerName', label: '归属角色' },
-          { key: 'ownerSteamId', label: 'SteamID' },
-          { key: 'squadName', label: '所属小队' },
-          { key: 'locationX', label: 'X' },
-          { key: 'locationY', label: 'Y' }
-        ]
-      })
+      void renderTerritoriesPage(state, envelope)
       return
     case 'locks':
       renderCollectionPage(state, envelope, {
@@ -1090,64 +1668,52 @@ const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
   const supportedFiles = Array.isArray(envelope.data?.supportedFiles)
     ? envelope.data.supportedFiles.filter((item): item is string => typeof item === 'string')
     : []
+  const fileDescriptions = typeof envelope.data?.fileDescriptions === 'object' && envelope.data?.fileDescriptions
+    ? Object.fromEntries(Object.entries(envelope.data.fileDescriptions).filter(([key, value]) => typeof key === 'string' && typeof value === 'string')) as FileDescriptionMap
+    : {}
   const structuredFields = Array.isArray(envelope.data?.structuredFields) ? envelope.data.structuredFields as StructuredField[] : sampleStructuredFields
   const structuredPath = typeof envelope.data?.structuredPath === 'string' ? envelope.data.structuredPath : ''
+  const activeWorkspaceOption = preferredWorkspaceOptionForCurrentRoute(state)
   body(state).innerHTML = `
     ${blockedNotice(state.route, envelope)}
-    <div class="workspace-grid settings-frame">
-      <aside class="workspace-sidebar">
-        <section class="workspace-card workspace-card--primary">
-          <div class="workspace-card-heading">
-            <span class="surface-eyebrow">Config Workspace</span>
-            <strong>配置工作区</strong>
-            <p>优先打开 ServerSettings.ini 并停留在配置模式，需要时再切到文件模式查看原始内容。</p>
-          </div>
-          <div class="controls-stack">
-            <select data-role="settings-workspace" ${blocked ? 'disabled' : ''}>
-              ${workspaces.map((workspace) => `
-                <option value="${escapeHtml(workspace.key)}">${escapeHtml(workspace.title)}</option>
-              `).join('')}
-            </select>
-            <select data-role="settings-file" ${blocked ? 'disabled' : ''}></select>
-            <button type="button" class="action-button" data-action="reload-settings" ${blocked ? 'disabled' : ''}>重新读取配置</button>
-          </div>
-          <div class="notice compact" data-role="settings-status">等待读取配置目录。</div>
-          <div class="meta-grid meta-grid--compact">
-            <div class="meta-item">
-              <strong>当前文件</strong>
-              <span data-role="settings-current-file">未选择</span>
+    <div class="settings-frame">
+      <div class="settings-file-strip" aria-label="配置文件选择">
+        <label class="settings-file-field">
+          <span>目录</span>
+          <select data-role="settings-workspace" ${blocked ? 'disabled' : ''}>
+            ${settingsWorkspaceOptions.map((workspace) => `
+              <option value="${escapeHtml(workspace.key)}" ${workspace.key === activeWorkspaceOption?.key ? 'selected' : ''}>${escapeHtml(settingsWorkspaceLabel(workspace, workspaces))}</option>
+            `).join('')}
+          </select>
+        </label>
+        <label class="settings-file-field">
+          <span>文件</span>
+          <details class="settings-file-picker" data-role="settings-file-picker">
+            <summary class="settings-file-picker-trigger" data-role="settings-file-trigger">请选择文件</summary>
+            <div class="settings-file-picker-panel">
+              <input data-role="settings-file-search" type="search" placeholder="搜索文件名或说明" ${blocked ? 'disabled' : ''} />
+              <div class="settings-file-picker-options" data-role="settings-file-options"></div>
             </div>
-            <div class="meta-item">
-              <strong>当前模式</strong>
-              <span data-role="settings-mode-note">配置模式</span>
-            </div>
-          </div>
-        </section>
+            <select data-role="settings-file" ${blocked ? 'disabled' : ''} hidden></select>
+          </details>
+        </label>
+        <button type="button" class="action-button secondary" data-action="reload-settings" ${blocked ? 'disabled' : ''}>刷新目录</button>
+      </div>
+      <div class="settings-host-strip">
+        <div class="settings-mode" role="group" aria-label="配置查看模式">
+          <button type="button" data-settings-mode="structured" aria-pressed="true">字段</button>
+          <button type="button" data-settings-mode="raw" aria-pressed="false">原文</button>
+        </div>
+        <div class="notice compact" data-role="settings-status" hidden></div>
+      </div>
 
-        <section class="workspace-card">
-          <div class="workspace-card-heading">
-            <span class="surface-eyebrow">View Mode</span>
-            <strong>查看方式</strong>
-          </div>
-          <div class="settings-mode" role="group" aria-label="配置查看模式">
-            <button type="button" data-settings-mode="structured" aria-pressed="true">配置模式</button>
-            <button type="button" data-settings-mode="raw" aria-pressed="false">文件模式</button>
-          </div>
-          <div class="workspace-hint">
-            <strong>推荐顺序</strong>
-            <span>平时修改参数走配置模式，字段更清楚；只有排查原文、复制片段或处理未结构化文件时再进入文件模式。</span>
-          </div>
-        </section>
-      </aside>
-
-      <div class="workspace-main">
-        <section class="workspace-card settings-structured-panel" data-role="settings-structured-panel">
-          <div class="settings-structured-header">
+      <div class="settings-main">
+        <section class="settings-section settings-structured-panel" data-role="settings-structured-panel">
+          <div class="settings-section-head">
             <div>
-              <strong>结构化配置</strong>
-              <p>这里聚焦当前文件里最常改、最容易出错的服务器参数。字段直接回写到右侧原始文件编辑区。</p>
+              <strong>快速配置</strong>
+              <p>优先展示中文字段名，适合直接查看和修改常用配置。</p>
             </div>
-            <span class="settings-file-mark" data-role="settings-file-label">未选择文件</span>
           </div>
           <div class="field-grid" data-role="settings-fields"></div>
         </section>
@@ -1155,8 +1721,8 @@ const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
         <section class="settings-editor" data-role="settings-editor-panel">
           <div class="settings-editor-header">
             <div>
-              <strong>原始文件</strong>
-              <p>保留完整文本视图，适合核对差异、处理暂未结构化的配置项，或直接做一次性调整。</p>
+              <strong>原文编辑</strong>
+              <p>需要查看完整 INI 内容或日志原文时，切到这里即可。</p>
             </div>
             <span class="settings-save-status" data-role="settings-save-status"></span>
           </div>
@@ -1170,16 +1736,71 @@ const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
     </div>
   `
   if (blocked || workspaces.length === 0) {
+    publishSettingsToolbar(state, true)
     return
+  }
+  const workspaceSelect = body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')
+  if (workspaceSelect && activeWorkspaceOption) {
+    workspaceSelect.value = activeWorkspaceOption.key
   }
   bindSettingsModeControls(state)
   const run = () => {
-    void loadSettingsWorkspace(state, workspaces, supportedFiles, structuredFields, structuredPath)
+    void loadSettingsWorkspace(state, workspaces, supportedFiles, fileDescriptions, structuredFields, structuredPath)
   }
   body(state).querySelector<HTMLButtonElement>('[data-action="reload-settings"]')?.addEventListener('click', run)
-  body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')?.addEventListener('change', run)
-  body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.addEventListener('change', () => {
-    void loadSettingsFile(state, structuredFields, structuredPath)
+  body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')?.addEventListener('change', (event) => {
+    const nextWorkspaceKey = (event.target as HTMLSelectElement).value
+    const nextWorkspace = settingsWorkspaceOptions.find((workspace) => workspace.key === nextWorkspaceKey)
+    if (!nextWorkspace) {
+      run()
+      return
+    }
+    state.preferredSettingsWorkspaceKey = nextWorkspace.key
+    rememberSettingsFileSelection(state, nextWorkspace.key, '')
+    if (nextWorkspace.routeKey !== state.route.key) {
+      void renderRoute(state, nextWorkspace.routeKey, { syncWorkspace: false })
+      return
+    }
+    run()
+  })
+  body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.addEventListener('change', (event) => {
+    rememberSettingsFileSelection(state, state.preferredSettingsWorkspaceKey, (event.target as HTMLSelectElement).value)
+    syncFilePickerUI(state)
+    publishSettingsToolbar(state)
+    void loadSettingsFile(state, fileDescriptions, structuredFields, structuredPath)
+  })
+  body(state).querySelector<HTMLInputElement>('[data-role="settings-file-search"]')?.addEventListener('input', (event) => {
+    state.settingsSearchQueryByWorkspace = {
+      ...state.settingsSearchQueryByWorkspace,
+      [state.preferredSettingsWorkspaceKey]: (event.target as HTMLInputElement).value
+    }
+    rememberSettingsFileSelection(state, state.preferredSettingsWorkspaceKey, syncFilteredFileSelect(state, fileDescriptions))
+    void loadSettingsFile(state, fileDescriptions, structuredFields, structuredPath)
+  })
+  body(state).querySelector<HTMLDetailsElement>('[data-role="settings-file-picker"]')?.addEventListener('toggle', (event) => {
+    const picker = event.currentTarget as HTMLDetailsElement
+    if (!picker.open) {
+      return
+    }
+    const searchInput = picker.querySelector<HTMLInputElement>('[data-role="settings-file-search"]')
+    if (searchInput) {
+      searchInput.value = state.settingsSearchQueryByWorkspace[state.preferredSettingsWorkspaceKey] || ''
+      window.setTimeout(() => searchInput.focus(), 0)
+    }
+    syncFilePickerUI(state)
+  })
+  body(state).querySelector<HTMLElement>('[data-role="settings-file-options"]')?.addEventListener('click', (event) => {
+    const option = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="select-settings-file"]')
+    if (!option) {
+      return
+    }
+    const select = body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')
+    if (!select) {
+      return
+    }
+    select.value = option.dataset.value || ''
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+    body(state).querySelector<HTMLDetailsElement>('[data-role="settings-file-picker"]')?.removeAttribute('open')
   })
   body(state).querySelector<HTMLButtonElement>('[data-action="save-settings"]')?.addEventListener('click', () => {
     void saveSettingsFile(state, structuredPath)
@@ -1187,6 +1808,7 @@ const renderSettingsPage = (state: RenderState, envelope: PluginEnvelope) => {
   body(state).querySelector<HTMLButtonElement>('[data-action="reset-settings"]')?.addEventListener('click', () => resetSettingsEditor(state, structuredFields, structuredPath))
   body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')?.addEventListener('input', () => syncSettingsEditorState(state, structuredFields, structuredPath))
   setSettingsViewMode(state, state.settingsViewMode)
+  publishSettingsToolbar(state)
   run()
 }
 
@@ -1194,46 +1816,148 @@ const renderPlayersPage = (state: RenderState, envelope: PluginEnvelope) => {
   renderShell(state, envelope)
   const blocked = !isUsable(envelope)
   const rows = rowsFromEnvelope(envelope, [
-    { id: 'sample-1', name: 'Prisoner One', steamId: '7656******0001', lastSeen: '待执行端返回', status: blocked ? '不可用' : '在线' }
+    { id: 'sample-1', name: 'Prisoner One', steamId: '7656******0001', lastLoginIp: '待本地库同步', lastSeen: '待本地库同步', status: blocked ? '不可用' : '在线' }
   ])
   const source = sourceSummary(envelope)
+  const routeQuery = parsedRouteQuery(state)
+  let visibleRows = rows
+  let selectedIDs = routeQuery.playerIds.filter((value) => rows.some((row) => String(row.playerId || row.id || '') === value))
   body(state).innerHTML = `
     ${blockedNotice(state.route, envelope)}
     ${source ? `<div class="notice"><strong>数据来源</strong><p>${escapeHtml(source)}</p></div>` : ''}
     <div class="controls">
       <input type="search" data-role="player-search" placeholder="搜索玩家、SteamID 或状态" />
-      <button type="button" class="action-button secondary" data-action="show-player-detail" ${rows.length === 0 ? 'disabled' : ''}>查看详情</button>
-      <button type="button" class="action-button secondary" disabled>踢出</button>
-      <button type="button" class="action-button secondary" disabled>封禁</button>
-      <button type="button" class="action-button secondary" disabled>发物品</button>
+      <button type="button" class="action-button secondary" data-action="bulk-open-map" ${blocked ? 'disabled' : ''}>地图</button>
+      <button type="button" class="action-button secondary" data-action="bulk-send-item" ${blocked ? 'disabled' : ''}>发物品</button>
+      <button type="button" class="action-button secondary" data-action="bulk-send-gift" ${blocked ? 'disabled' : ''}>发礼包</button>
     </div>
-    <div data-role="players-table">${playersTable(rows)}</div>
-    <div class="task-row" data-role="player-detail">选择“查看详情”以显示当前第一名玩家的结构化详情占位。</div>
+    <div class="task-row" data-role="player-selection-summary">已选择 ${selectedIDs.length} 名玩家。</div>
+    <div data-role="players-table">${playersTable(rows, selectedIDs)}</div>
+    <div data-role="player-detail-modal"></div>
+    <div data-role="player-action-modal"></div>
   `
+  const syncSelectionSummary = () => {
+    const summary = body(state).querySelector<HTMLElement>('[data-role="player-selection-summary"]')
+    if (summary) {
+      summary.textContent = selectedIDs.length > 0 ? `已选择 ${selectedIDs.length} 名玩家。` : '当前未选择玩家。'
+    }
+  }
   body(state).querySelector<HTMLInputElement>('[data-role="player-search"]')?.addEventListener('input', (event) => {
     const query = (event.target as HTMLInputElement).value.toLowerCase()
     const filtered = rows.filter((row) => Object.values(row).some((value) => String(value).toLowerCase().includes(query)))
+    visibleRows = filtered
     const table = body(state).querySelector<HTMLElement>('[data-role="players-table"]')
     if (table) {
-      table.innerHTML = playersTable(filtered)
+      table.innerHTML = playersTable(filtered, selectedIDs)
     }
   })
-  body(state).querySelector<HTMLButtonElement>('[data-action="show-player-detail"]')?.addEventListener('click', () => {
-    const target = body(state).querySelector<HTMLElement>('[data-role="player-detail"]')
-    if (!target) {
+  body(state).querySelector<HTMLElement>('[data-role="players-table"]')?.addEventListener('click', (event) => {
+    const toggle = (event.target as HTMLElement).closest<HTMLInputElement>('[data-role="player-select"]')
+    if (toggle) {
+      const playerID = String(toggle.value || '')
+      selectedIDs = toggle.checked
+        ? uniqueStrings([...selectedIDs, playerID])
+        : selectedIDs.filter((value) => value !== playerID)
+      syncSelectionSummary()
       return
     }
-    const first = rows[0] || {}
-    target.innerHTML = `
-      <strong>${escapeHtml(String(first.name || first.id || '玩家详情'))}</strong>
-      <p>SteamID: ${escapeHtml(String(first.steamId || first.steamID || '-'))}</p>
-      <p>状态: ${escapeHtml(String(first.status || '-'))}</p>
-      <p>最近活动: ${escapeHtml(String(first.lastSeen || first.updatedAt || '-'))}</p>
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="select-player"]')
+    if (!button) {
+      return
+    }
+    const selected = rowByID(visibleRows, button.dataset.playerId || '')
+    if (selected) {
+      renderPlayerDetail(state, selected)
+    }
+  })
+  body(state).querySelector<HTMLInputElement>('[data-role="player-select-all"]')?.addEventListener('change', (event) => {
+    const checked = (event.target as HTMLInputElement).checked
+    selectedIDs = checked ? uniqueStrings(visibleRows.map((row) => String(row.playerId || row.id || '')).filter(Boolean)) : []
+    const table = body(state).querySelector<HTMLElement>('[data-role="players-table"]')
+    if (table) {
+      table.innerHTML = playersTable(visibleRows, selectedIDs)
+    }
+    syncSelectionSummary()
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="bulk-open-map"]')?.addEventListener('click', () => {
+    const ids = selectedIDs.length > 0 ? selectedIDs : visibleRows.slice(0, 1).map((row) => String(row.playerId || row.id || '')).filter(Boolean)
+    openTrajectoryMap(state, ids, routeQuery)
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="bulk-send-item"]')?.addEventListener('click', () => {
+    openPlayerActionDialog(state, 'send-item', visibleRows, selectedIDs)
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="bulk-send-gift"]')?.addEventListener('click', () => {
+    openPlayerActionDialog(state, 'send-gift', visibleRows, selectedIDs)
+  })
+  syncSelectionSummary()
+}
+
+const renderPlayerDetail = (state: RenderState, row: Record<string, unknown>) => {
+  state.playerDetailRow = row
+  const target = body(state).querySelector<HTMLElement>('[data-role="player-detail-modal"]')
+  if (!target) {
+    return
+  }
+  target.innerHTML = `
+    <div class="notice">
+      <div class="surface-title">
+        <div>
+          <h3>${escapeHtml(String(row.name || row.id || '玩家详情'))}</h3>
+        </div>
+        <button type="button" class="action-button secondary" data-action="close-player-detail">关闭</button>
+      </div>
+      <p>SteamID: ${escapeHtml(String(row.steamId || row.steamID || row.uuid || '-'))}</p>
+      <p>最近登录 IP: ${escapeHtml(String(row.lastLoginIp || row.last_login_ip || '-'))}</p>
+      <p>同 IP 预警: ${escapeHtml(duplicateIPText(row))}</p>
+      <p>最近活动: ${escapeHtml(String(row.lastSeen || row.updatedAt || '-'))}</p>
+      <div class="controls">
+        <button type="button" class="action-button secondary" data-action="single-open-map" data-player-id="${escapeHtml(String(row.playerId || row.id || ''))}">地图</button>
+      </div>
+      <div class="controls">
+        <input type="text" data-role="player-title" placeholder="头衔" value="${escapeHtml(String(row.title || ''))}" />
+        <input type="text" data-role="player-qq" placeholder="QQ" value="${escapeHtml(String(row.qq || ''))}" />
+        <input type="text" data-role="player-status" placeholder="状态" value="${escapeHtml(String(row.status || 'active'))}" />
+        <input type="number" data-role="player-fame" placeholder="声望" value="${escapeHtml(String(row.fame ?? ''))}" />
+        <input type="number" data-role="player-account" placeholder="余额" value="${escapeHtml(String(row.account ?? ''))}" />
+        <input type="number" data-role="player-gold" placeholder="黄金" value="${escapeHtml(String(row.gold ?? ''))}" />
+        <button type="button" class="action-button" data-action="save-player-local" data-player-id="${escapeHtml(String(row.playerId || row.id || ''))}">保存</button>
+      </div>
+      <div data-role="player-save-result"></div>
       <details>
         <summary>查看结构化数据</summary>
-        <pre>${escapeHtml(JSON.stringify(first, null, 2))}</pre>
+        <pre>${escapeHtml(JSON.stringify(row, null, 2))}</pre>
       </details>
-    `
+    </div>
+  `
+  target.querySelector<HTMLButtonElement>('[data-action="close-player-detail"]')?.addEventListener('click', () => {
+    state.playerDetailRow = null
+    target.innerHTML = ''
+  })
+  target.querySelector<HTMLButtonElement>('[data-action="single-open-map"]')?.addEventListener('click', () => {
+    openTrajectoryMap(state, [String(row.playerId || row.id || '')].filter(Boolean), parsedRouteQuery(state))
+  })
+  target.querySelector<HTMLButtonElement>('[data-action="save-player-local"]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget as HTMLButtonElement
+    const output = target.querySelector<HTMLElement>('[data-role="player-save-result"]')
+    const playerId = Number(button.dataset.playerId || 0)
+    const bodyPayload = {
+      confirmed: true,
+      action: 'update-local-player',
+      playerId,
+      title: target.querySelector<HTMLInputElement>('[data-role="player-title"]')?.value || '',
+      qq: target.querySelector<HTMLInputElement>('[data-role="player-qq"]')?.value || '',
+      status: target.querySelector<HTMLInputElement>('[data-role="player-status"]')?.value || '',
+      fame: optionalNumber(target.querySelector<HTMLInputElement>('[data-role="player-fame"]')?.value),
+      account: optionalNumber(target.querySelector<HTMLInputElement>('[data-role="player-account"]')?.value),
+      gold: optionalNumber(target.querySelector<HTMLInputElement>('[data-role="player-gold"]')?.value)
+    }
+    if (!playerId) {
+      if (output) output.textContent = '缺少玩家 ID。'
+      return
+    }
+    if (output) output.textContent = '正在保存...'
+    const result = await state.bridge.api<PluginEnvelope>(pluginAPIPath('players/action'), 'POST', bodyPayload).catch((error) => failedEnvelope(state.route, error))
+    if (output) output.textContent = operationSummary(normalizeEnvelope(state.route, result))
   })
 }
 
@@ -1253,82 +1977,297 @@ const renderCollectionPage = (
   `
 }
 
-const renderLogsPage = (state: RenderState, envelope: PluginEnvelope) => {
+const renderTerritoriesPage = async (state: RenderState, envelope: PluginEnvelope) => {
   renderShell(state, envelope)
+  const query = new URLSearchParams(state.context?.routeQuery || '')
+  const activeView = query.get('view') === 'squads' ? 'squads' : 'territories'
+  const source = sourceSummary(envelope)
   const blocked = !isUsable(envelope)
-  const workspaces = Array.isArray(envelope.data?.workspaces) ? envelope.data.workspaces as LogWorkspace[] : []
+  const territoryRows = rowsFromEnvelope(envelope, blocked ? [] : [sampleRow(territoryColumns)])
   body(state).innerHTML = `
     ${blockedNotice(state.route, envelope)}
+    ${source ? `<div class="notice"><strong>数据来源</strong><p>${escapeHtml(source)}</p></div>` : ''}
     <div class="controls">
-      <select data-role="log-workspace" ${blocked ? 'disabled' : ''}>
-        ${workspaces.map((workspace) => `
-          <option value="${escapeHtml(workspace.key)}">${escapeHtml(workspace.title)}</option>
-        `).join('')}
-      </select>
-      <select data-role="log-file" ${blocked ? 'disabled' : ''}></select>
-      <button type="button" class="action-button" data-action="reload-logs" ${blocked ? 'disabled' : ''}>读取日志</button>
+      <div class="segmented-control" role="group" aria-label="领地视图切换">
+        <button type="button" data-territory-view="territories" aria-pressed="${activeView === 'territories'}">领地</button>
+        <button type="button" data-territory-view="squads" aria-pressed="${activeView === 'squads'}" ${blocked ? 'disabled' : ''}>小队</button>
+      </div>
+      <button type="button" class="action-button secondary" data-action="reload-territories" ${blocked ? 'disabled' : ''}>刷新</button>
     </div>
-    <div class="notice" data-role="logs-status">等待读取日志目录。</div>
-    <div class="meta-grid" data-role="logs-meta"></div>
-    <pre class="log-box" data-role="logs">暂无日志结果。</pre>
+    <div data-role="territory-view-body"></div>
+    <div data-role="squad-detail-dialog" class="inline-dialog"></div>
   `
-  if (blocked || workspaces.length === 0) {
+  body(state).querySelectorAll<HTMLButtonElement>('[data-territory-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextView = (button.dataset.territoryView || 'territories') as TerritoryViewMode
+      const params = new URLSearchParams(state.context?.routeQuery || '')
+      params.set('view', nextView)
+      state.bridge.navigate({ kind: 'plugin-route', target: `/plugins/${scumAdminPluginID}/territories?${params.toString()}` })
+    })
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="reload-territories"]')?.addEventListener('click', () => {
+    void renderTerritoriesPage(state, envelope)
+  })
+  if (activeView === 'squads' && !blocked) {
+    await renderSquadListView(state)
     return
   }
-  const run = () => {
-    void loadLogWorkspace(state, workspaces)
-  }
-  body(state).querySelector<HTMLButtonElement>('[data-action="reload-logs"]')?.addEventListener('click', run)
-  body(state).querySelector<HTMLSelectElement>('[data-role="log-workspace"]')?.addEventListener('change', run)
-  body(state).querySelector<HTMLSelectElement>('[data-role="log-file"]')?.addEventListener('change', () => {
-    void loadLogFile(state)
-  })
-  run()
+  renderTerritoryListView(state, territoryRows)
 }
 
-const loadSettingsWorkspace = async (state: RenderState, workspaces: ConfigWorkspace[], supportedFiles: string[], structuredFields: StructuredField[], structuredPath: string) => {
+const territoryColumns = [
+  { key: 'territoryId', label: '领地 ID' },
+  { key: 'ownerName', label: '归属角色' },
+  { key: 'ownerSteamId', label: 'SteamID' },
+  { key: 'squadName', label: '所属小队' },
+  { key: 'locationX', label: 'X' },
+  { key: 'locationY', label: 'Y' }
+]
+
+const squadColumns = [
+  { key: 'squadId', label: '小队 ID' },
+  { key: 'squadName', label: '小队名称' },
+  { key: 'memberCount', label: '人数' },
+  { key: 'leaderName', label: '队长' },
+  { key: 'leaderSteamId', label: '队长 SteamID' },
+  { key: 'lastSeen', label: '最近活动' }
+]
+
+const squadMemberColumns = [
+  { key: 'playerId', label: '玩家 ID' },
+  { key: 'name', label: '名称' },
+  { key: 'steamId', label: 'SteamID' },
+  { key: 'squadRole', label: '身份' },
+  { key: 'status', label: '状态' },
+  { key: 'locationX', label: 'X' },
+  { key: 'locationY', label: 'Y' },
+  { key: 'lastSeen', label: '最近活动' }
+]
+
+const squadVehicleColumns = [
+  { key: 'id', label: '载具 ID' },
+  { key: 'vehicleType', label: '载具类型' },
+  { key: 'ownerName', label: '归属角色' },
+  { key: 'ownerPrisonerId', label: '归属玩家' },
+  { key: 'locationX', label: 'X' },
+  { key: 'locationY', label: 'Y' }
+]
+
+const renderTerritoryListView = (state: RenderState, rows: Record<string, unknown>[]) => {
+  const target = body(state).querySelector<HTMLElement>('[data-role="territory-view-body"]')
+  if (!target) {
+    return
+  }
+  target.innerHTML = genericTable(rows, territoryColumns, '暂无领地数据。')
+}
+
+const renderSquadListView = async (state: RenderState) => {
+  const target = body(state).querySelector<HTMLElement>('[data-role="territory-view-body"]')
+  if (!target) {
+    return
+  }
+  target.innerHTML = '<div class="empty">正在加载小队...</div>'
+  const result = await state.bridge.api<PluginEnvelope>(pluginAPIPath('squads'), 'GET').catch((error) => failedEnvelope(state.route, error))
+  const envelope = normalizeEnvelope(state.route, result)
+  if (!isUsable(envelope)) {
+    target.innerHTML = blockedNotice(state.route, envelope)
+    return
+  }
+  const rows = rowsFromEnvelope(envelope, [])
+  target.innerHTML = squadTable(rows)
+  target.querySelector<HTMLElement>('table')?.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-action="squad-detail"]')
+    if (!button) {
+      return
+    }
+    const squadId = button.dataset.squadId || ''
+    const row = rows.find((item) => String(item.squadId || item.id || '') === squadId) || {}
+    void openSquadDetailDialog(state, row)
+  })
+}
+
+const squadTable = (rows: Record<string, unknown>[]) => {
+  if (rows.length === 0) {
+    return '<div class="empty">暂无小队数据。</div>'
+  }
+  return `
+    <table>
+      <thead><tr>${squadColumns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join('')}<th>操作</th></tr></thead>
+      <tbody>
+        ${rows.map((row) => {
+          const squadId = String(row.squadId || row.id || '')
+          return `
+            <tr>
+              ${squadColumns.map((column) => `<td>${escapeHtml(String(row[column.key] ?? '-'))}</td>`).join('')}
+              <td><button type="button" class="action-button secondary" data-action="squad-detail" data-squad-id="${escapeHtml(squadId)}">详情</button></td>
+            </tr>
+          `
+        }).join('')}
+      </tbody>
+    </table>
+  `
+}
+
+const openSquadDetailDialog = async (state: RenderState, squad: Record<string, unknown>) => {
+  const dialog = body(state).querySelector<HTMLElement>('[data-role="squad-detail-dialog"]')
+  const squadId = String(squad.squadId || squad.id || '')
+  if (!dialog || !squadId) {
+    return
+  }
+  dialog.innerHTML = '<div class="notice">正在加载小队详情...</div>'
+  const [memberResult, vehicleResult] = await Promise.all([
+    state.bridge.api<PluginEnvelope>(pluginAPIPath('squads/members'), 'GET', undefined, { squadId }).catch((error) => failedEnvelope(state.route, error)),
+    state.bridge.api<PluginEnvelope>(pluginAPIPath('squads/vehicles'), 'GET', undefined, { squadId }).catch((error) => failedEnvelope(state.route, error))
+  ])
+  const memberEnvelope = normalizeEnvelope(state.route, memberResult)
+  const vehicleEnvelope = normalizeEnvelope(state.route, vehicleResult)
+  const members = isUsable(memberEnvelope) ? rowsFromEnvelope(memberEnvelope, []) : []
+  const vehicles = isUsable(vehicleEnvelope) ? rowsFromEnvelope(vehicleEnvelope, []) : []
+  const playerIds = members.map((member) => String(member.playerId || member.id || '')).filter(Boolean)
+  dialog.innerHTML = `
+    <div class="inline-dialog-panel" role="dialog" aria-modal="true" aria-label="小队详情">
+      <div class="notice">
+        <div class="surface-title">
+          <div>
+            <h3>${escapeHtml(String(squad.squadName || `小队 #${squadId}`))}</h3>
+            <p>${escapeHtml(`成员 ${members.length} 人，载具 ${vehicles.length} 台。`)}</p>
+          </div>
+          <button type="button" class="action-button secondary" data-action="close-squad-detail">关闭</button>
+        </div>
+        <div class="table-actions">
+          <button type="button" class="action-button secondary" data-action="open-squad-map" ${playerIds.length === 0 ? 'disabled' : ''}>整队轨迹</button>
+          <span class="status-pill" data-tone="ok">小队详情</span>
+        </div>
+      </div>
+      ${!isUsable(memberEnvelope) ? blockedNotice(state.route, memberEnvelope) : ''}
+      <div class="task-row">
+        <strong>队员</strong>
+        <div class="inline-dialog-table">${genericTable(members, squadMemberColumns, '暂无队员数据。')}</div>
+      </div>
+      ${!isUsable(vehicleEnvelope) ? blockedNotice(state.route, vehicleEnvelope) : ''}
+      <div class="task-row">
+        <strong>载具</strong>
+        <div class="inline-dialog-table">${genericTable(vehicles, squadVehicleColumns, '暂无整队载具数据。')}</div>
+      </div>
+    </div>
+  `
+  dialog.onclick = (event) => {
+    if (event.target === dialog) {
+      dialog.innerHTML = ''
+    }
+  }
+  dialog.querySelector<HTMLButtonElement>('[data-action="close-squad-detail"]')?.addEventListener('click', () => {
+    dialog.innerHTML = ''
+  })
+  dialog.querySelector<HTMLButtonElement>('[data-action="open-squad-map"]')?.addEventListener('click', () => {
+    openTrajectoryMap(state, playerIds, parsedRouteQuery(state))
+  })
+}
+
+const renderLogsPage = (state: RenderState, envelope: PluginEnvelope) => {
+  syncPreferredWorkspaceForRoute(state, 'logs')
+  renderSettingsPage(state, envelope)
+}
+
+const loadSettingsWorkspace = async (state: RenderState, workspaces: ConfigWorkspace[], supportedFiles: string[], fileDescriptions: FileDescriptionMap, structuredFields: StructuredField[], structuredPath: string) => {
+  const workspaceLoadVersion = state.settingsWorkspaceLoadVersion + 1
+  state.settingsWorkspaceLoadVersion = workspaceLoadVersion
   const workspaceKey = body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')?.value || workspaces[0]?.key || ''
   const workspace = workspaces.find((item) => item.key === workspaceKey) || workspaces[0]
   if (!workspace) {
     setRouteNotice(state, 'settings-status', '未找到配置目录。', true)
     return
   }
-  setRouteNotice(state, 'settings-status', `正在读取 ${workspace.title}...`)
+  state.preferredSettingsWorkspaceKey = workspace.key
+  setRouteNotice(state, 'settings-status', '')
+  const searchInput = body(state).querySelector<HTMLInputElement>('[data-role="settings-file-search"]')
+  if (searchInput) {
+    searchInput.value = state.settingsSearchQueryByWorkspace[workspace.key] || ''
+  }
+  if (!state.settingsModeTouched) {
+    setSettingsViewMode(state, defaultSettingsViewMode('', structuredPath, [], workspace.key))
+  }
+  setFileSelectLoading(state, 'settings-file')
+  setSettingsFields(state, [])
+  setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
+  publishSettingsToolbar(state, true)
   try {
-    const entries = normalizeWorkspaceEntries(workspace.directoryPath, await loadDirectoryEntries(state, workspace.directoryPath))
+    const entriesResult = await loadDirectoryEntries(state, workspace.directoryPath, () => state.settingsWorkspaceLoadVersion !== workspaceLoadVersion)
+    if (!entriesResult) {
+      return
+    }
+    const entries = normalizeWorkspaceEntries(workspace.directoryPath, entriesResult)
+    if (state.settingsWorkspaceLoadVersion !== workspaceLoadVersion) {
+      return
+    }
     const scopedSupportedFiles = workspace.supportedFiles && workspace.supportedFiles.length > 0 ? workspace.supportedFiles : supportedFiles
-    const filteredEntries = filterEntriesByRelativePath(entries, scopedSupportedFiles)
-    const prioritizedEntries = prioritizeFiles(filteredEntries, scopedSupportedFiles)
-    populateFileSelect(state, 'settings-file', prioritizedEntries, structuredPath || workspace.defaultFilePath)
-    setRouteNotice(state, 'settings-status', prioritizedEntries.length > 0 ? '配置目录已加载。' : '未找到可读取的配置文件。', prioritizedEntries.length === 0)
-    await loadSettingsFile(state, structuredFields, structuredPath)
+    const filteredEntries = workspace.key === 'game-logs' ? entries : filterEntriesByRelativePath(entries, scopedSupportedFiles)
+    const prioritizedEntries = prioritizeFiles(filteredEntries, scopedSupportedFiles, workspace.key === 'game-logs')
+    state.settingsDirectoryEntriesByWorkspace = {
+      ...state.settingsDirectoryEntriesByWorkspace,
+      [workspace.key]: prioritizedEntries
+    }
+    const preferredPath = state.preferredSettingsFileByWorkspace[workspace.key]
+      || (workspace.key === 'windows-server' ? structuredPath : '')
+      || workspace.defaultFilePath
+    populateFileSelect(state, 'settings-file', prioritizedEntries, preferredPath, fileDescriptions, workspace.key === 'game-logs')
+    syncFilteredFileSelect(state, fileDescriptions)
+    rememberSettingsFileSelection(state, workspace.key, body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.value || '')
+    publishSettingsToolbar(state)
+    const emptyText = workspace.key === 'game-logs' ? '当前日志目录下暂未发现可读取的日志文件。' : '未找到可读取的配置文件。'
+    setRouteNotice(state, 'settings-status', prioritizedEntries.length > 0 ? '' : emptyText, prioritizedEntries.length === 0)
+    if (state.settingsWorkspaceLoadVersion !== workspaceLoadVersion) {
+      return
+    }
+    await loadSettingsFile(state, fileDescriptions, structuredFields, structuredPath)
   } catch (error) {
+    if (state.settingsWorkspaceLoadVersion !== workspaceLoadVersion) {
+      return
+    }
     setRouteNotice(state, 'settings-status', coreErrorMessage(error), true)
     setSettingsFields(state, [])
     setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
+    publishSettingsToolbar(state)
   }
 }
 
-const loadSettingsFile = async (state: RenderState, structuredFields: StructuredField[], structuredPath: string) => {
+const loadSettingsFile = async (state: RenderState, fileDescriptions: FileDescriptionMap, structuredFields: StructuredField[], structuredPath: string) => {
+  const fileLoadVersion = state.settingsFileLoadVersion + 1
+  state.settingsFileLoadVersion = fileLoadVersion
+  const workspace = selectedSettingsWorkspace(state)
   const relativePath = body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.value || ''
+  if (workspace) {
+    rememberSettingsFileSelection(state, workspace.key, relativePath)
+  }
   if (!relativePath) {
-    setRouteNotice(state, 'settings-status', '当前目录下没有可读取的配置文件。', true)
+    const emptyText = workspace?.key === 'game-logs' ? '当前日志目录下暂未发现可读取的日志文件。' : '当前目录下没有可读取的配置文件。'
+    setRouteNotice(state, 'settings-status', emptyText, true)
     setSettingsFields(state, [])
     setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
     return
   }
-  setRouteNotice(state, 'settings-status', '正在读取配置...')
+  setRouteNotice(state, 'settings-status', '')
   try {
-    const result = await readFile(state, relativePath)
+    const result = await readFile(state, relativePath, () => state.settingsFileLoadVersion !== fileLoadVersion)
+    if (!result) {
+      return
+    }
+    if (state.settingsFileLoadVersion !== fileLoadVersion) {
+      return
+    }
     const content = typeof result.content === 'string' ? result.content : ''
-    const fields = resolveEditableSettingsFields(structuredFields, content, sameRelativePath(relativePath, structuredPath))
+    const editable = sameRelativePath(relativePath, structuredPath)
+    const fields = editable ? resolveEditableSettingsFields(structuredFields, content, true) : []
     setSettingsFields(state, fields)
     setSettingsEditor(state, relativePath, content, typeof result.checksum === 'string' ? result.checksum : '', structuredFields, structuredPath)
     if (!state.settingsModeTouched) {
-      setSettingsViewMode(state, defaultSettingsViewMode(relativePath, structuredPath, fields))
+      setSettingsViewMode(state, defaultSettingsViewMode(relativePath, structuredPath, fields, workspace?.key || ''))
     }
-    setRouteNotice(state, 'settings-status', result.truncated ? '配置已读取，但内容被截断，暂不能提交修改。' : '配置已加载。', Boolean(result.truncated))
+    setRouteNotice(state, 'settings-status', result.truncated ? '内容过长，当前只显示截断后的末尾片段。' : '', Boolean(result.truncated))
   } catch (error) {
+    if (state.settingsFileLoadVersion !== fileLoadVersion) {
+      return
+    }
     setRouteNotice(state, 'settings-status', coreErrorMessage(error), true)
     setSettingsFields(state, [])
     setSettingsEditor(state, '', '', '', structuredFields, structuredPath)
@@ -1400,7 +2339,6 @@ const syncSettingsEditorState = (state: RenderState, structuredFields: Structure
 
 const setSettingsEditor = (state: RenderState, path: string, content: string, checksum: string, structuredFields: StructuredField[], structuredPath: string) => {
   const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
-  const label = body(state).querySelector<HTMLElement>('[data-role="settings-file-label"]')
   const status = body(state).querySelector<HTMLElement>('[data-role="settings-save-status"]')
   if (!editor) {
     return
@@ -1410,10 +2348,6 @@ const setSettingsEditor = (state: RenderState, path: string, content: string, ch
   editor.dataset.path = path
   editor.dataset.checksum = checksum
   editor.dataset.structuredPath = structuredPath
-  if (label) {
-    label.textContent = path ? fileNameFromPath(path) : ''
-  }
-  setTextRole(state, 'settings-current-file', path || '未选择')
   if (status) {
     status.textContent = ''
   }
@@ -1448,61 +2382,135 @@ const setSettingsViewMode = (state: RenderState, mode: RenderState['settingsView
   if (editor) {
     editor.hidden = mode !== 'raw'
   }
-  setTextRole(state, 'settings-mode-note', mode === 'structured' ? '配置模式' : '文件模式')
 }
 
-const defaultSettingsViewMode = (relativePath: string, structuredPath: string, fields: ResolvedStructuredField[]): RenderState['settingsViewMode'] => {
-  if (normalizeRelativePath(relativePath) === normalizeRelativePath(structuredPath)) {
+const defaultSettingsViewMode = (relativePath: string, structuredPath: string, fields: ResolvedStructuredField[], workspaceKey = ''): RenderState['settingsViewMode'] => {
+  if (workspaceKey === 'game-logs') {
+    return 'raw'
+  }
+  if (normalizeRelativePath(relativePath) === normalizeRelativePath(structuredPath) && fields.some((field) => field.editable)) {
     return 'structured'
   }
   return 'raw'
 }
 
-const loadLogWorkspace = async (state: RenderState, workspaces: LogWorkspace[]) => {
-  const workspaceKey = body(state).querySelector<HTMLSelectElement>('[data-role="log-workspace"]')?.value || workspaces[0]?.key || ''
-  const workspace = workspaces.find((item) => item.key === workspaceKey) || workspaces[0]
-  if (!workspace) {
-    setRouteNotice(state, 'logs-status', '未找到日志目录。', true)
+const rememberSettingsFileSelection = (state: RenderState, workspaceKey: string, relativePath: string) => {
+  const normalizedWorkspaceKey = String(workspaceKey || '').trim()
+  if (!normalizedWorkspaceKey) {
     return
   }
-  setRouteNotice(state, 'logs-status', `正在读取 ${workspace.title}...`)
-  try {
-    const entries = normalizeWorkspaceEntries(workspace.directoryPath, await loadDirectoryEntries(state, workspace.directoryPath))
-    populateFileSelect(state, 'log-file', prioritizeFiles(entries, workspace.preferredFiles || []))
-    setRouteNotice(state, 'logs-status', `${workspace.title} 已加载，共 ${entries.length} 个文件。`)
-    await loadLogFile(state)
-  } catch (error) {
-    setRouteNotice(state, 'logs-status', coreErrorMessage(error), true)
-    setRouteMeta(state, 'logs-meta', [])
-    setLogText(state, '暂无日志结果。')
+  const normalizedPath = normalizeRelativePath(relativePath)
+  if (!normalizedPath) {
+    state.preferredSettingsFileByWorkspace = Object.fromEntries(
+      Object.entries(state.preferredSettingsFileByWorkspace).filter(([key]) => key !== normalizedWorkspaceKey)
+    )
+    return
+  }
+  state.preferredSettingsFileByWorkspace = {
+    ...state.preferredSettingsFileByWorkspace,
+    [normalizedWorkspaceKey]: normalizedPath,
   }
 }
 
-const loadLogFile = async (state: RenderState) => {
-  const relativePath = body(state).querySelector<HTMLSelectElement>('[data-role="log-file"]')?.value || ''
-  if (!relativePath) {
-    setRouteNotice(state, 'logs-status', '当前目录下没有可读取的日志文件。', true)
-    setRouteMeta(state, 'logs-meta', [])
-    setLogText(state, '暂无日志结果。')
+const syncPreferredWorkspaceForRoute = (state: RenderState, routeKey: string) => {
+  const workspace = settingsWorkspaceOptions.find((option) => option.routeKey === routeKey)
+  if (!workspace) {
     return
   }
-  setRouteNotice(state, 'logs-status', `正在读取 ${relativePath}...`)
-  try {
-    const result = await readFile(state, relativePath)
-    const content = typeof result.content === 'string' ? result.content : ''
-    setRouteMeta(state, 'logs-meta', [
-      { label: '文件路径', value: relativePath },
-      { label: '校验和', value: typeof result.checksum === 'string' ? result.checksum : '-' },
-      { label: '文件大小', value: formatByteCount(result.sizeBytes) },
-      { label: '截断状态', value: result.truncated ? `已截断，偏移 ${result.readOffset || 0}` : '完整' }
-    ])
-    setLogText(state, redactSecrets(content) || '日志文件为空。')
-    setRouteNotice(state, 'logs-status', `${relativePath} 已加载。`)
-  } catch (error) {
-    setRouteNotice(state, 'logs-status', coreErrorMessage(error), true)
-    setRouteMeta(state, 'logs-meta', [])
-    setLogText(state, '暂无日志结果。')
+  state.preferredSettingsWorkspaceKey = workspace.key
+}
+
+const preferredWorkspaceOptionForCurrentRoute = (state: RenderState) => {
+  const routeWorkspace = settingsWorkspaceOptions.find((workspace) => workspace.routeKey === state.route.key)
+  if (routeWorkspace) {
+    return routeWorkspace
   }
+  return settingsWorkspaceOptions.find((workspace) => workspace.key === state.preferredSettingsWorkspaceKey) || settingsWorkspaceOptions[0]
+}
+
+const settingsWorkspaceLabel = (option: SettingsWorkspaceOption, workspaces: ConfigWorkspace[]) => {
+  return workspaces.find((workspace) => workspace.key === option.key)?.title || option.title
+}
+
+const selectedSettingsWorkspace = (state: RenderState) => {
+  const workspaceKey = body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')?.value || state.preferredSettingsWorkspaceKey
+  const title = body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')?.selectedOptions?.[0]?.textContent?.trim() || ''
+  return {
+    key: workspaceKey,
+    title
+  }
+}
+
+const publishSettingsToolbar = (state: RenderState, disabled = false) => {
+  if (state.route.key !== 'settings' && state.route.key !== 'logs') {
+    clearHostToolbar(state)
+    return
+  }
+  const workspaceSelect = body(state).querySelector<HTMLSelectElement>('[data-role="settings-workspace"]')
+  const fileSelect = body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')
+  state.bridge.toolbar({
+    visible: true,
+    controls: [
+      {
+        key: 'settings-workspace',
+        kind: 'select',
+        label: '目录',
+        value: workspaceSelect?.value || state.preferredSettingsWorkspaceKey,
+        disabled: disabled || Boolean(workspaceSelect?.disabled),
+        options: selectOptions(workspaceSelect)
+      },
+      {
+        key: 'settings-file',
+        kind: 'select',
+        label: '文件',
+        value: fileSelect?.value || '',
+        disabled: disabled || Boolean(fileSelect?.disabled) || (fileSelect ? fileSelect.options.length === 0 : true),
+        options: selectOptions(fileSelect)
+      }
+    ],
+    actions: [
+      {
+        key: 'reload-settings',
+        label: '刷新目录',
+        disabled: disabled || Boolean(workspaceSelect?.disabled)
+      }
+    ]
+  })
+}
+
+const clearHostToolbar = (state: RenderState) => {
+  state.bridge.toolbar({ visible: false, controls: [], actions: [] })
+}
+
+const handleHostToolbarAction = (state: RenderState, payload: PluginToolbarActionPayload) => {
+  if (state.route.key !== 'settings' && state.route.key !== 'logs') {
+    return
+  }
+  const key = String(payload.key || '')
+  if (payload.kind === 'click' && key === 'reload-settings') {
+    body(state).querySelector<HTMLButtonElement>('[data-action="reload-settings"]')?.click()
+    return
+  }
+  if (payload.kind !== 'change') {
+    return
+  }
+  const selector = key === 'settings-workspace' ? '[data-role="settings-workspace"]' : key === 'settings-file' ? '[data-role="settings-file"]' : ''
+  const select = selector ? body(state).querySelector<HTMLSelectElement>(selector) : null
+  if (!select) {
+    return
+  }
+  select.value = String(payload.value || '')
+  select.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+const selectOptions = (select?: HTMLSelectElement | null) => {
+  if (!select) {
+    return []
+  }
+  return Array.from(select.options).map((option) => ({
+    label: option.textContent?.trim() || option.value,
+    value: option.value
+  }))
 }
 
 const renderUpdatePage = (state: RenderState, envelope: PluginEnvelope) => {
@@ -1570,25 +2578,495 @@ const bindOperationButton = (state: RenderState, action: string, apiPath: string
   })
 }
 
-const playersTable = (rows: Record<string, unknown>[]) => {
+const playersTable = (rows: Record<string, unknown>[], selectedIDs: string[]) => {
   if (rows.length === 0) {
     return '<div class="empty">没有匹配的玩家。</div>'
   }
+  const allSelected = rows.length > 0 && rows.every((row) => selectedIDs.includes(String(row.playerId || row.id || '')))
   return `
     <table>
-      <thead><tr><th>玩家</th><th>SteamID</th><th>状态</th><th>最近活动</th></tr></thead>
+      <thead><tr><th><input type="checkbox" data-role="player-select-all" ${allSelected ? 'checked' : ''} /></th><th>玩家</th><th>SteamID</th><th>最近登录 IP</th><th>同 IP 预警</th><th>状态</th><th>最近活动</th><th>操作</th></tr></thead>
       <tbody>
         ${rows.map((row) => `
           <tr>
+            <td><input type="checkbox" data-role="player-select" value="${escapeHtml(String(row.playerId || row.id || ''))}" ${selectedIDs.includes(String(row.playerId || row.id || '')) ? 'checked' : ''} /></td>
             <td>${escapeHtml(String(row.name || row.id || '-'))}</td>
             <td>${escapeHtml(String(row.steamId || row.steamID || '-'))}</td>
+            <td>${escapeHtml(String(row.lastLoginIp || row.last_login_ip || '-'))}</td>
+            <td>${duplicateIPCell(row)}</td>
             <td>${escapeHtml(String(row.status || '-'))}</td>
             <td>${escapeHtml(String(row.lastSeen || row.updatedAt || '-'))}</td>
+            <td>
+              <button type="button" class="action-button secondary" data-action="select-player" data-player-id="${escapeHtml(String(row.playerId || row.id || ''))}">详情</button>
+              <button type="button" class="action-button secondary" data-action="row-open-map" data-player-id="${escapeHtml(String(row.playerId || row.id || ''))}">地图</button>
+            </td>
           </tr>
         `).join('')}
       </tbody>
     </table>
   `
+}
+
+const parsedRouteQuery = (state: RenderState): RouteQueryState => {
+  const search = new URLSearchParams(state.context?.routeQuery || '')
+  const focus = search.get('focus') === 'vehicles' || search.get('focus') === 'supplies' ? search.get('focus') as RouteQueryState['focus'] : 'players'
+  const startTime = search.get('startTime') || defaultStartTime()
+  const endTime = search.get('endTime') || defaultEndTime()
+  const playerIDs = String(search.get('playerIds') || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean)
+  return { focus, playerIds: playerIDs, startTime, endTime }
+}
+
+const defaultEndTime = () => new Date().toISOString().slice(0, 16)
+
+const defaultStartTime = () => {
+  const value = new Date(Date.now() - 6 * 60 * 60 * 1000)
+  return value.toISOString().slice(0, 16)
+}
+
+const uniqueStrings = (values: string[]) => Array.from(new Set(values.filter(Boolean)))
+
+const openTrajectoryMap = (state: RenderState, playerIDs: string[], routeQuery: RouteQueryState) => {
+  const target = `/plugins/${scumAdminPluginID}/trajectory-map?focus=players&playerIds=${encodeURIComponent(playerIDs.join(','))}&startTime=${encodeURIComponent(routeQuery.startTime)}&endTime=${encodeURIComponent(routeQuery.endTime)}`
+  state.bridge.navigate({ kind: 'plugin-route', target })
+}
+
+const openPlayerActionDialog = (state: RenderState, mode: PlayerActionDialogMode, rows: Record<string, unknown>[], selectedIDs: string[]) => {
+  const modal = body(state).querySelector<HTMLElement>('[data-role="player-action-modal"]')
+  if (!modal) {
+    return
+  }
+  const effectiveIDs = selectedIDs.length > 0 ? selectedIDs : rows.slice(0, 1).map((row) => String(row.playerId || row.id || '')).filter(Boolean)
+  if (effectiveIDs.length === 0) {
+    modal.innerHTML = '<div class="notice error">请先选择至少一名玩家。</div>'
+    return
+  }
+  modal.innerHTML = `
+    <div class="notice">
+      <div class="surface-title">
+        <div>
+          <h3>${mode === 'send-item' ? '批量发物品' : '批量发礼包'}</h3>
+        </div>
+        <button type="button" class="action-button secondary" data-action="close-player-action">关闭</button>
+      </div>
+      <p>将向 ${effectiveIDs.length} 名玩家提交受控发放任务。</p>
+      <div class="controls">
+        ${mode === 'send-item'
+          ? `
+            <input type="text" data-role="dispatch-item-code" placeholder="物品代码" />
+            <input type="number" data-role="dispatch-item-quantity" placeholder="数量" value="1" min="1" />
+          `
+          : `
+            <input type="number" data-role="dispatch-gift-id" placeholder="礼包 ID" min="1" />
+          `}
+      </div>
+      <label class="controls">
+        <input type="checkbox" data-role="dispatch-confirmed" />
+        <span>我确认这是高风险发放操作</span>
+      </label>
+      <div class="controls">
+        <button type="button" class="action-button" data-action="submit-player-action">提交任务</button>
+      </div>
+      <div data-role="dispatch-result"></div>
+    </div>
+  `
+  modal.querySelector<HTMLButtonElement>('[data-action="close-player-action"]')?.addEventListener('click', () => {
+    modal.innerHTML = ''
+  })
+  modal.querySelector<HTMLButtonElement>('[data-action="submit-player-action"]')?.addEventListener('click', async () => {
+    const confirmed = modal.querySelector<HTMLInputElement>('[data-role="dispatch-confirmed"]')?.checked || false
+    const resultNode = modal.querySelector<HTMLElement>('[data-role="dispatch-result"]')
+    if (!confirmed) {
+      if (resultNode) {
+        resultNode.textContent = '请先确认本次高风险发放操作。'
+      }
+      return
+    }
+    const payload: Record<string, unknown> = {
+      confirmed: true,
+      action: mode,
+      serverInstanceId: currentServerInstanceID(state),
+      playerIds: effectiveIDs.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
+    }
+    if (mode === 'send-item') {
+      payload.itemCode = modal.querySelector<HTMLInputElement>('[data-role="dispatch-item-code"]')?.value || ''
+      payload.quantity = Number(modal.querySelector<HTMLInputElement>('[data-role="dispatch-item-quantity"]')?.value || '1') || 1
+    } else {
+      payload.giftId = Number(modal.querySelector<HTMLInputElement>('[data-role="dispatch-gift-id"]')?.value || '0') || 0
+    }
+    if (resultNode) {
+      resultNode.textContent = '正在提交 operation handle...'
+    }
+    const result = await state.bridge.api<PluginEnvelope>(pluginAPIPath('players/action'), 'POST', payload).catch((error) => failedEnvelope(state.route, error))
+    if (resultNode) {
+      resultNode.textContent = operationSummary(normalizeEnvelope(state.route, result))
+    }
+  })
+}
+
+const openGiftDetailDialog = async (state: RenderState, giftID: number) => {
+  const dialog = body(state).querySelector<HTMLElement>('[data-role="gift-dialog"]')
+  if (!dialog || !giftID) {
+    return
+  }
+  dialog.innerHTML = '<div class="notice">正在加载礼包详情...</div>'
+  const result = await state.bridge.api<PluginEnvelope>(pluginAPIPath('gifts/detail'), 'GET', undefined, { giftId: giftID }).catch((error) => failedEnvelope(state.route, error))
+  const envelope = normalizeEnvelope(state.route, result)
+  const detail = envelope.data?.gift as Record<string, unknown> | undefined
+  dialog.innerHTML = `
+    <div class="notice">
+      <div class="surface-title">
+        <div>
+          <h3>${escapeHtml(String(detail?.name || `礼包 #${giftID}`))}</h3>
+        </div>
+        <button type="button" class="action-button secondary" data-action="close-gift-dialog">关闭</button>
+      </div>
+      <p>编码：${escapeHtml(String(detail?.code || '-'))}</p>
+      <p>状态：${escapeHtml(String(detail?.status || '-'))}</p>
+      <p>说明：${escapeHtml(String(detail?.description || '暂无说明'))}</p>
+      <details>
+        <summary>物品明细</summary>
+        <pre>${escapeHtml(String(detail?.itemsJson || '[]'))}</pre>
+      </details>
+    </div>
+  `
+  dialog.querySelector<HTMLButtonElement>('[data-action="close-gift-dialog"]')?.addEventListener('click', () => {
+    dialog.innerHTML = ''
+  })
+}
+
+const openGiftMutationDialog = (state: RenderState, action: 'create' | 'update' | 'delete', giftID: number, rows: Record<string, unknown>[]) => {
+  const dialog = body(state).querySelector<HTMLElement>('[data-role="gift-dialog"]')
+  if (!dialog) {
+    return
+  }
+  const row = rows.find((item) => Number(item.giftId || item.id || 0) === giftID) || {}
+  dialog.innerHTML = `
+    <div class="notice">
+      <div class="surface-title">
+        <div>
+          <h3>${action === 'create' ? '新增礼包' : action === 'update' ? '编辑礼包' : '删除礼包'}</h3>
+        </div>
+        <button type="button" class="action-button secondary" data-action="close-gift-dialog">关闭</button>
+      </div>
+      ${action === 'delete'
+        ? `<p>将删除礼包 <strong>${escapeHtml(String(row.name || giftID || ''))}</strong>。</p>`
+        : `
+          <div class="controls">
+            <input type="text" data-role="gift-name" placeholder="礼包名称" value="${escapeHtml(String(row.name || ''))}" />
+            <input type="text" data-role="gift-code" placeholder="礼包编码" value="${escapeHtml(String(row.code || ''))}" />
+            <input type="text" data-role="gift-status" placeholder="状态" value="${escapeHtml(String(row.status || 'active'))}" />
+          </div>
+          <div class="controls">
+            <input type="text" data-role="gift-description" placeholder="礼包说明" value="${escapeHtml(String(row.description || ''))}" />
+          </div>
+          <div class="controls">
+            <textarea data-role="gift-items-json" rows="6" placeholder='[{"itemCode":"","quantity":1}]'>${escapeHtml(String(row.itemsJson || '[]'))}</textarea>
+          </div>
+        `}
+      <label class="controls">
+        <input type="checkbox" data-role="gift-confirmed" />
+        <span>我确认这是高风险礼包配置操作</span>
+      </label>
+      <div class="controls">
+        <button type="button" class="action-button" data-action="submit-gift-mutation">提交</button>
+      </div>
+      <div data-role="gift-mutation-result"></div>
+    </div>
+  `
+  dialog.querySelector<HTMLButtonElement>('[data-action="close-gift-dialog"]')?.addEventListener('click', () => {
+    dialog.innerHTML = ''
+  })
+  dialog.querySelector<HTMLButtonElement>('[data-action="submit-gift-mutation"]')?.addEventListener('click', async () => {
+    const confirmed = dialog.querySelector<HTMLInputElement>('[data-role="gift-confirmed"]')?.checked || false
+    const resultNode = dialog.querySelector<HTMLElement>('[data-role="gift-mutation-result"]')
+    if (!confirmed) {
+      if (resultNode) {
+        resultNode.textContent = '请先确认本次高风险礼包操作。'
+      }
+      return
+    }
+    const payload: Record<string, unknown> = {
+      confirmed: true,
+      action,
+      giftId: giftID,
+      name: dialog.querySelector<HTMLInputElement>('[data-role="gift-name"]')?.value || '',
+      code: dialog.querySelector<HTMLInputElement>('[data-role="gift-code"]')?.value || '',
+      status: dialog.querySelector<HTMLInputElement>('[data-role="gift-status"]')?.value || 'active',
+      description: dialog.querySelector<HTMLInputElement>('[data-role="gift-description"]')?.value || '',
+      itemsJson: dialog.querySelector<HTMLTextAreaElement>('[data-role="gift-items-json"]')?.value || '[]'
+    }
+    if (resultNode) {
+      resultNode.textContent = '正在提交 operation handle...'
+    }
+    const result = await state.bridge.api<PluginEnvelope>(pluginAPIPath('gifts/action'), 'POST', payload).catch((error) => failedEnvelope(state.route, error))
+    if (resultNode) {
+      resultNode.textContent = operationSummary(normalizeEnvelope(state.route, result))
+    }
+  })
+}
+
+const openGiftSendDialog = (state: RenderState, giftID: number) => {
+  const dialog = body(state).querySelector<HTMLElement>('[data-role="gift-dialog"]')
+  if (!dialog || !giftID) {
+    return
+  }
+  dialog.innerHTML = `
+    <div class="notice">
+      <div class="surface-title">
+        <div>
+          <h3>发送礼包给玩家</h3>
+        </div>
+        <button type="button" class="action-button secondary" data-action="close-gift-dialog">关闭</button>
+      </div>
+      <div class="controls">
+        <input type="text" data-role="gift-send-player-ids" placeholder="玩家 ID，逗号分隔" />
+      </div>
+      <label class="controls">
+        <input type="checkbox" data-role="gift-send-confirmed" />
+        <span>我确认这是高风险礼包发放操作</span>
+      </label>
+      <div class="controls">
+        <button type="button" class="action-button" data-action="submit-gift-send">提交任务</button>
+      </div>
+      <div data-role="gift-send-result"></div>
+    </div>
+  `
+  dialog.querySelector<HTMLButtonElement>('[data-action="close-gift-dialog"]')?.addEventListener('click', () => {
+    dialog.innerHTML = ''
+  })
+  dialog.querySelector<HTMLButtonElement>('[data-action="submit-gift-send"]')?.addEventListener('click', async () => {
+    const confirmed = dialog.querySelector<HTMLInputElement>('[data-role="gift-send-confirmed"]')?.checked || false
+    const resultNode = dialog.querySelector<HTMLElement>('[data-role="gift-send-result"]')
+    if (!confirmed) {
+      if (resultNode) {
+        resultNode.textContent = '请先确认本次高风险礼包发放操作。'
+      }
+      return
+    }
+    const playerIDs = String(dialog.querySelector<HTMLInputElement>('[data-role="gift-send-player-ids"]')?.value || '')
+      .split(',')
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value) && value > 0)
+    const result = await state.bridge.api<PluginEnvelope>(pluginAPIPath('players/action'), 'POST', {
+      confirmed: true,
+      action: 'send-gift',
+      serverInstanceId: currentServerInstanceID(state),
+      playerIds: playerIDs,
+      giftId: giftID
+    }).catch((error) => failedEnvelope(state.route, error))
+    if (resultNode) {
+      resultNode.textContent = operationSummary(normalizeEnvelope(state.route, result))
+    }
+  })
+}
+
+const renderTrajectoryMapPage = (state: RenderState, envelope: PluginEnvelope) => {
+  renderShell(state, envelope)
+  const blocked = !isUsable(envelope)
+  const query = parsedRouteQuery(state)
+  const layers = typeof envelope.data?.layers === 'object' && envelope.data?.layers ? envelope.data.layers as Record<string, unknown> : {}
+  const focus = (String(layers.focus || query.focus || 'players').trim() as RouteQueryState['focus']) || 'players'
+  const playerRows = Array.isArray(layers.players) ? layers.players as Record<string, unknown>[] : []
+  const vehicleRows = Array.isArray(layers.vehicles) ? layers.vehicles as Record<string, unknown>[] : []
+  const supplyRows = Array.isArray(layers.supplies) ? layers.supplies as Record<string, unknown>[] : []
+  body(state).innerHTML = `
+    ${blockedNotice(state.route, envelope)}
+    <div class="controls">
+      <select data-role="map-focus" ${blocked ? 'disabled' : ''}>
+        <option value="players" ${focus === 'players' ? 'selected' : ''}>玩家轨迹</option>
+        <option value="vehicles" ${focus === 'vehicles' ? 'selected' : ''}>载具状态</option>
+        <option value="supplies" ${focus === 'supplies' ? 'selected' : ''}>物资状态</option>
+      </select>
+      <input type="datetime-local" data-role="map-start" value="${escapeHtml(query.startTime)}" ${blocked ? 'disabled' : ''} />
+      <input type="datetime-local" data-role="map-end" value="${escapeHtml(query.endTime)}" ${blocked ? 'disabled' : ''} />
+      <input type="text" data-role="map-player-ids" value="${escapeHtml(query.playerIds.join(','))}" placeholder="玩家 ID，逗号分隔" ${blocked ? 'disabled' : ''} />
+      <button type="button" class="action-button secondary" data-action="reload-map" ${blocked ? 'disabled' : ''}>刷新</button>
+    </div>
+    <div class="notice">
+      <strong>当前视图</strong>
+      <p>${escapeHtml(focus === 'players' ? '玩家轨迹按时间点显示；载具和物资当前以时间切片快照方式展示。' : focus === 'vehicles' ? '载具页展示当前时间范围内最近快照。' : '物资页展示当前时间范围内最近快照。')}</p>
+    </div>
+    <div class="task-row">
+      <strong>玩家轨迹</strong>
+      <p>${playerRows.length > 0 ? `已返回 ${playerRows.length} 条轨迹点或轨迹记录。` : '当前时间范围没有玩家轨迹数据。'}</p>
+    </div>
+    ${genericTable(
+      focus === 'players' ? playerRows : focus === 'vehicles' ? vehicleRows : supplyRows,
+      focus === 'players'
+        ? [
+          { key: 'playerId', label: '玩家 ID' },
+          { key: 'name', label: '名称' },
+          { key: 'locationX', label: 'X' },
+          { key: 'locationY', label: 'Y' },
+          { key: 'locationZ', label: 'Z' },
+          { key: 'observedAt', label: '时间' }
+        ]
+        : focus === 'vehicles'
+          ? [
+            { key: 'id', label: '载具 ID' },
+            { key: 'vehicleType', label: '载具类型' },
+            { key: 'ownerPrisonerId', label: '归属玩家' },
+            { key: 'locationX', label: 'X' },
+            { key: 'locationY', label: 'Y' },
+            { key: 'locationZ', label: 'Z' }
+          ]
+          : [
+            { key: 'id', label: '物资 ID' },
+            { key: 'name', label: '名称' },
+            { key: 'locationX', label: 'X' },
+            { key: 'locationY', label: 'Y' },
+            { key: 'locationZ', label: 'Z' },
+            { key: 'observedAt', label: '时间' }
+          ],
+      focus === 'players' ? '暂无玩家轨迹数据。' : focus === 'vehicles' ? '暂无载具快照数据。' : '暂无物资快照数据。'
+    )}
+  `
+  body(state).querySelector<HTMLButtonElement>('[data-action="reload-map"]')?.addEventListener('click', async () => {
+    const nextFocus = (body(state).querySelector<HTMLSelectElement>('[data-role="map-focus"]')?.value || 'players') as RouteQueryState['focus']
+    const nextStart = body(state).querySelector<HTMLInputElement>('[data-role="map-start"]')?.value || defaultStartTime()
+    const nextEnd = body(state).querySelector<HTMLInputElement>('[data-role="map-end"]')?.value || defaultEndTime()
+    const nextPlayerIDs = String(body(state).querySelector<HTMLInputElement>('[data-role="map-player-ids"]')?.value || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+    state.bridge.navigate({
+      kind: 'plugin-route',
+      target: `/plugins/${scumAdminPluginID}/trajectory-map?focus=${encodeURIComponent(nextFocus)}&playerIds=${encodeURIComponent(nextPlayerIDs.join(','))}&startTime=${encodeURIComponent(nextStart)}&endTime=${encodeURIComponent(nextEnd)}`
+    })
+  })
+}
+
+const renderGiftsPage = async (state: RenderState, envelope: PluginEnvelope) => {
+  renderShell(state, envelope)
+  const blocked = !isUsable(envelope)
+  const rows = rowsFromEnvelope(envelope, [])
+  body(state).innerHTML = `
+    ${blockedNotice(state.route, envelope)}
+    <div class="controls">
+      <input type="search" data-role="gift-search" placeholder="搜索礼包名称或编码" />
+      <button type="button" class="action-button secondary" data-action="gift-create" ${blocked ? 'disabled' : ''}>新增礼包</button>
+      <button type="button" class="action-button secondary" data-action="gift-refresh" ${blocked ? 'disabled' : ''}>刷新</button>
+    </div>
+    <div data-role="gift-stats"></div>
+    <div data-role="gift-table"></div>
+    <div data-role="gift-records"></div>
+    <div data-role="gift-dialog"></div>
+  `
+  const statsResult = blocked ? null : await state.bridge.api<PluginEnvelope>(`${pluginAPIPath('gifts/stats')}`, 'GET').catch(() => null)
+  const recordsResult = blocked ? null : await state.bridge.api<PluginEnvelope>(`${pluginAPIPath('gifts/dispatch-records')}`, 'GET').catch(() => null)
+  const stats = (statsResult && normalizeEnvelope(state.route, statsResult).data?.stats || {}) as GiftStatSummary
+  const records = recordsResult ? rowsFromEnvelope(normalizeEnvelope(state.route, recordsResult), []) : []
+  const renderGiftRows = (items: Record<string, unknown>[]) => {
+    const table = body(state).querySelector<HTMLElement>('[data-role="gift-table"]')
+    if (!table) {
+      return
+    }
+    table.innerHTML = genericTable(items, [
+      { key: 'id', label: 'ID' },
+      { key: 'name', label: '礼包名称' },
+      { key: 'code', label: '编码' },
+      { key: 'status', label: '状态' },
+      { key: 'dispatchCount', label: '发放次数' },
+      { key: 'updatedAt', label: '更新时间' }
+    ], '暂无礼包配置。')
+    const actionRows = items.length === 0 ? '' : `
+      <div class="task-list">
+        ${items.map((row) => `
+          <article class="task-row">
+            <strong>${escapeHtml(String(row.name || row.id || '礼包'))}</strong>
+            <p>${escapeHtml(String(row.description || '暂无说明'))}</p>
+            <div class="controls">
+              <button type="button" class="action-button secondary" data-action="gift-detail" data-gift-id="${escapeHtml(String(row.giftId || row.id || ''))}">详情</button>
+              <button type="button" class="action-button secondary" data-action="gift-edit" data-gift-id="${escapeHtml(String(row.giftId || row.id || ''))}">编辑</button>
+              <button type="button" class="action-button secondary" data-action="gift-send" data-gift-id="${escapeHtml(String(row.giftId || row.id || ''))}">发送</button>
+              <button type="button" class="action-button secondary" data-action="gift-delete" data-gift-id="${escapeHtml(String(row.giftId || row.id || ''))}">删除</button>
+            </div>
+          </article>
+        `).join('')}
+      </div>
+    `
+    table.innerHTML += actionRows
+    table.querySelectorAll<HTMLButtonElement>('[data-action^="gift-"]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const giftID = Number(button.dataset.giftId || '0') || 0
+        const action = button.dataset.action || ''
+        if (action === 'gift-detail') {
+          await openGiftDetailDialog(state, giftID)
+          return
+        }
+        if (action === 'gift-send') {
+          openGiftSendDialog(state, giftID)
+          return
+        }
+        openGiftMutationDialog(state, action === 'gift-create' ? 'create' : action === 'gift-edit' ? 'update' : 'delete', giftID, items)
+      })
+    })
+  }
+  body(state).querySelector<HTMLElement>('[data-role="gift-stats"]')!.innerHTML = `
+    <div class="controls">
+      <div class="task-row"><strong>礼包总数</strong><p>${escapeHtml(String(stats.totalGifts ?? 0))}</p></div>
+      <div class="task-row"><strong>启用礼包</strong><p>${escapeHtml(String(stats.activeGifts ?? 0))}</p></div>
+      <div class="task-row"><strong>累计发放</strong><p>${escapeHtml(String(stats.totalDispatches ?? 0))}</p></div>
+      <div class="task-row"><strong>今日发放</strong><p>${escapeHtml(String(stats.todayDispatches ?? 0))}</p></div>
+    </div>
+  `
+  body(state).querySelector<HTMLElement>('[data-role="gift-records"]')!.innerHTML = `
+    <details>
+      <summary>发放记录入口</summary>
+      ${genericTable(records, [
+        { key: 'action', label: '动作' },
+        { key: 'giftNameSnapshot', label: '礼包' },
+        { key: 'itemCode', label: '物品代码' },
+        { key: 'quantity', label: '数量' },
+        { key: 'status', label: '状态' },
+        { key: 'createdAt', label: '时间' }
+      ], '暂无发放记录。')}
+    </details>
+  `
+  renderGiftRows(rows)
+  body(state).querySelector<HTMLInputElement>('[data-role="gift-search"]')?.addEventListener('input', (event) => {
+    const query = String((event.target as HTMLInputElement).value || '').trim().toLowerCase()
+    renderGiftRows(rows.filter((row) => String(row.name || '').toLowerCase().includes(query) || String(row.code || '').toLowerCase().includes(query)))
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="gift-create"]')?.addEventListener('click', () => {
+    openGiftMutationDialog(state, 'create', 0, rows)
+  })
+  body(state).querySelector<HTMLButtonElement>('[data-action="gift-refresh"]')?.addEventListener('click', () => {
+    void renderRoute(state, 'gifts')
+  })
+}
+
+const rowByID = (rows: Record<string, unknown>[], id: string) => {
+  return rows.find((row) => String(row.playerId || row.id || '') === id)
+}
+
+const optionalNumber = (value: string | undefined) => {
+  const trimmed = String(value || '').trim()
+  if (trimmed === '') {
+    return undefined
+  }
+  const parsed = Number(trimmed)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+const duplicateIPText = (row: Record<string, unknown>) => {
+  const duplicate = row.duplicateIp || row.duplicate_ip
+  const count = Number(row.duplicateIpCount || row.duplicate_ip_count || 0)
+  if (!duplicate || count <= 1) {
+    return '正常'
+  }
+  return `${count} 个账号`
+}
+
+const duplicateIPCell = (row: Record<string, unknown>) => {
+  const text = duplicateIPText(row)
+  if (text === '正常') {
+    return '<span class="status-pill" data-tone="ok">正常</span>'
+  }
+  return `<span class="status-pill" data-tone="warn">${escapeHtml(text)}</span>`
 }
 
 const genericTable = (rows: Record<string, unknown>[], columns: Array<{ key: string; label: string }>, empty: string) => {
@@ -1615,17 +3093,35 @@ const sampleRow = (columns: Array<{ key: string; label: string }>) => {
   return row
 }
 
-const loadDirectoryEntries = async (state: RenderState, relativePath: string) => {
+const loadDirectoryEntries = async (state: RenderState, relativePath: string, isStale: () => boolean = () => false) => {
   const serverInstanceID = currentServerInstanceID(state)
   const dispatch = await coreJSON<CoreFileDispatchResponse>(state, `/api/v1/server-instances/${encodeURIComponent(serverInstanceID)}/files?path=${encodeURIComponent(relativePath)}`)
-  const operation = await waitForFileOperation(state, dispatch.operation.id)
+  if (dispatch.operation?.status === 'succeeded') {
+    return normalizeFileEntries(dispatch.operation.result?.entries)
+  }
+  const operation = await waitForFileOperation(state, dispatch.operation.id, isStale)
+  if (!operation) {
+    return null
+  }
   return normalizeFileEntries(operation.result?.entries)
 }
 
-const readFile = async (state: RenderState, relativePath: string) => {
+const readFile = async (state: RenderState, relativePath: string, isStale: () => boolean = () => false) => {
   const serverInstanceID = currentServerInstanceID(state)
   const dispatch = await coreJSON<CoreFileDispatchResponse>(state, `/api/v1/server-instances/${encodeURIComponent(serverInstanceID)}/files/read`, 'POST', { path: relativePath, contentMode: 'text' })
-  const operation = await waitForFileOperation(state, dispatch.operation.id)
+  if (dispatch.operation?.status === 'succeeded') {
+    return {
+      content: dispatch.operation.result?.content,
+      checksum: dispatch.operation.result?.checksum,
+      sizeBytes: Number(dispatch.operation.result?.sizeBytes || 0),
+      truncated: Boolean(dispatch.operation.result?.truncated),
+      readOffset: Number(dispatch.operation.result?.readOffset || 0)
+    }
+  }
+  const operation = await waitForFileOperation(state, dispatch.operation.id, isStale)
+  if (!operation) {
+    return null
+  }
   return {
     content: operation.result?.content,
     checksum: operation.result?.checksum,
@@ -1639,14 +3135,20 @@ const coreJSON = async <T>(state: RenderState, path: string, method = 'GET', bod
   return await state.bridge.api<T>(path, method, body)
 }
 
-const waitForFileOperation = async (state: RenderState, operationID: string) => {
+const waitForFileOperation = async (state: RenderState, operationID: string, isStale: () => boolean = () => false) => {
   for (let attempt = 0; attempt < 30; attempt += 1) {
+    if (isStale()) {
+      return null
+    }
     const operation = await coreJSON<CoreFileOperation>(state, `/api/v1/file-operations/${encodeURIComponent(operationID)}`)
     if (operation.status === 'succeeded') {
       return operation
     }
     if (operation.status === 'failed' || operation.status === 'rejected' || operation.status === 'conflicted') {
       throw new Error(operation.errorMessage || operation.errorCode || 'file operation failed')
+    }
+    if (isStale()) {
+      return null
     }
     await delay(300)
   }
@@ -1673,35 +3175,28 @@ const normalizeWorkspaceEntries = (workspacePath: string, entries: FileListEntry
   })
 }
 
-const populateFileSelect = (state: RenderState, role: string, entries: FileListEntry[], preferredPath?: string) => {
+const populateFileSelect = (state: RenderState, role: string, entries: FileListEntry[], preferredPath?: string, fileDescriptions: FileDescriptionMap = {}, isLogWorkspace = false) => {
   const select = body(state).querySelector<HTMLSelectElement>(`[data-role="${role}"]`)
   if (!select) {
     return
   }
+  select.disabled = entries.length === 0
   const normalizedPreferred = normalizeRelativePath(preferredPath || '')
   const preferred = entries.find((entry) => sameRelativePath(entry.relativePath, normalizedPreferred) || fileNameFromPath(entry.relativePath).toLowerCase() === fileNameFromPath(normalizedPreferred).toLowerCase())?.relativePath || entries[0]?.relativePath || ''
-  select.innerHTML = entries.map((entry) => `
-    <option value="${escapeHtml(entry.relativePath)}"${entry.relativePath === preferred ? ' selected' : ''}>${escapeHtml(entry.name)}</option>
+  const options = buildFileSelectOptions(entries, fileDescriptions, isLogWorkspace)
+  select.innerHTML = entries.map((entry, index) => `
+    <option value="${escapeHtml(entry.relativePath)}"${entry.relativePath === preferred ? ' selected' : ''}>${escapeHtml(options[index]?.label || entry.name)}</option>
   `).join('')
+  syncFilePickerUI(state)
 }
 
-const prioritizeFiles = (entries: FileListEntry[], preferredFiles: string[]) => {
-  if (preferredFiles.length === 0) {
-    return entries
+const setFileSelectLoading = (state: RenderState, role: string, label = '正在加载文件...') => {
+  const select = body(state).querySelector<HTMLSelectElement>(`[data-role="${role}"]`)
+  if (!select) {
+    return
   }
-  const priority = new Map<string, number>()
-  preferredFiles.forEach((name, index) => {
-    priority.set(normalizeRelativePath(name).toLowerCase(), index)
-    priority.set(fileNameFromPath(name).toLowerCase(), index)
-  })
-  return [...entries].sort((left, right) => {
-    const leftPriority = priority.get(normalizeRelativePath(left.relativePath).toLowerCase()) ?? priority.get(left.name.toLowerCase()) ?? preferredFiles.length + 1
-    const rightPriority = priority.get(normalizeRelativePath(right.relativePath).toLowerCase()) ?? priority.get(right.name.toLowerCase()) ?? preferredFiles.length + 1
-    if (leftPriority === rightPriority) {
-      return left.name.localeCompare(right.name)
-    }
-    return leftPriority - rightPriority
-  })
+  select.disabled = true
+  select.innerHTML = `<option value="">${escapeHtml(label)}</option>`
 }
 
 const filterEntriesByRelativePath = (entries: FileListEntry[], allowedPaths: string[]) => {
@@ -1715,8 +3210,6 @@ const filterEntriesByRelativePath = (entries: FileListEntry[], allowedPaths: str
   }
   return entries.filter((entry) => allowedSet.has(normalizeRelativePath(entry.relativePath).toLowerCase()) || allowedSet.has(entry.name.toLowerCase()))
 }
-
-const normalizeRelativePath = (path: string) => String(path || '').replace(/\\+/g, '/').replace(/^\/+/, '').replace(/\/+/g, '/').trim()
 
 const joinRelativePath = (basePath: string, path: string) => {
   const base = normalizeRelativePath(basePath)
@@ -1735,10 +3228,54 @@ const relativePathIncludesDirectory = (path: string, directoryPath: string) => {
 
 const sameRelativePath = (left: string, right: string) => normalizeRelativePath(left).toLowerCase() === normalizeRelativePath(right).toLowerCase()
 
+// syncFilteredFileSelect refreshes the file selector from cached ordered entries and the current search query.
+// state is the active route render state, and fileDescriptions carries optional per-file summaries.
+// It returns after updating the selector options and publishing the synchronized host toolbar state.
+const syncFilteredFileSelect = (state: RenderState, fileDescriptions: FileDescriptionMap) => {
+  const workspaceKey = state.preferredSettingsWorkspaceKey
+  const cachedEntries = state.settingsDirectoryEntriesByWorkspace[workspaceKey] || []
+  const query = state.settingsSearchQueryByWorkspace[workspaceKey] || ''
+  const isLogWorkspace = workspaceKey === 'game-logs'
+  const filteredEntries = filterFileEntriesByQuery(cachedEntries, query, fileDescriptions, isLogWorkspace)
+  const preferredPath = state.preferredSettingsFileByWorkspace[workspaceKey] || ''
+  populateFileSelect(state, 'settings-file', filteredEntries, preferredPath, fileDescriptions, isLogWorkspace)
+  publishSettingsToolbar(state)
+  return body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')?.value || ''
+}
+
+// syncFilePickerUI mirrors the hidden select state into the custom dropdown trigger and option list.
+// state is the active render state and the function reads the current hidden select to rebuild visible dropdown content.
+// It returns after updating the trigger text and option button list, or silently exits when the picker DOM is unavailable.
+const syncFilePickerUI = (state: RenderState) => {
+  const select = body(state).querySelector<HTMLSelectElement>('[data-role="settings-file"]')
+  const trigger = body(state).querySelector<HTMLElement>('[data-role="settings-file-trigger"]')
+  const optionsRoot = body(state).querySelector<HTMLElement>('[data-role="settings-file-options"]')
+  if (!select || !trigger || !optionsRoot) {
+    return
+  }
+  const selectedOption = select.selectedOptions?.[0]
+  trigger.textContent = selectedOption?.textContent?.trim() || '请选择文件'
+  const options = Array.from(select.options)
+  if (options.length === 0) {
+    optionsRoot.innerHTML = '<div class="settings-file-picker-empty">当前没有可选文件。</div>'
+    return
+  }
+  optionsRoot.innerHTML = options.map((option) => `
+    <button
+      type="button"
+      class="settings-file-picker-option${option.selected ? ' is-active' : ''}"
+      data-action="select-settings-file"
+      data-value="${escapeHtml(option.value)}"
+    >${escapeHtml(option.textContent?.trim() || option.value)}</button>
+  `).join('')
+}
+
+const structuredFieldID = (section: string, key: string) => `${String(section || '').trim()}\u0000${String(key || '').trim()}`
+
 const resolveStructuredFields = (definitions: StructuredField[], content: string) => {
   const values = parseIniValues(content)
   return definitions.map((definition) => {
-    const value = values[`${definition.section}.${definition.key}`] || ''
+    const value = values[structuredFieldID(definition.section, definition.key)] || ''
     return {
       ...definition,
       value: definition.sensitive ? (value ? '已设置' : '') : value
@@ -1764,9 +3301,34 @@ const parseIniValues = (content: string) => {
     }
     const key = line.slice(0, separatorIndex).trim()
     const value = line.slice(separatorIndex + 1).trim()
-    values[`${currentSection}.${key}`] = value
+    values[structuredFieldID(currentSection, key)] = value
   }
   return values
+}
+
+const parseIniEntries = (content: string) => {
+  const entries: Array<{ section: string; key: string; value: string }> = []
+  let currentSection = ''
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith(';') || line.startsWith('#')) {
+      continue
+    }
+    if (line.startsWith('[') && line.endsWith(']')) {
+      currentSection = line.slice(1, -1).trim()
+      continue
+    }
+    const separatorIndex = line.indexOf('=')
+    if (separatorIndex < 0 || !currentSection) {
+      continue
+    }
+    entries.push({
+      section: currentSection,
+      key: line.slice(0, separatorIndex).trim(),
+      value: line.slice(separatorIndex + 1).trim(),
+    })
+  }
+  return entries
 }
 
 const setRouteNotice = (state: RenderState, role: string, message: string, error = false) => {
@@ -1774,6 +3336,7 @@ const setRouteNotice = (state: RenderState, role: string, message: string, error
   if (!target) {
     return
   }
+  target.hidden = message.trim() === ''
   target.classList.toggle('error', error)
   target.textContent = message
 }
@@ -1795,53 +3358,194 @@ const setRouteMeta = (state: RenderState, role: string, items: Array<{ label: st
   `).join('')
 }
 
+const normalizedBooleanLiteral = (value: string) => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'true' || normalized === '1') {
+    return 'True'
+  }
+  if (normalized === 'false' || normalized === '0') {
+    return 'False'
+  }
+  return ''
+}
+
+const resolveFieldControlType = (field: StructuredField, value: string): ResolvedStructuredField['controlType'] => {
+  if (field.sensitive) {
+    return 'password'
+  }
+  if (field.type === 'boolean') {
+    return 'boolean'
+  }
+  if (field.type === 'integer' || field.type === 'float') {
+    return 'number'
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(String(value || '').trim())) {
+    return 'number'
+  }
+  if (normalizedBooleanLiteral(value)) {
+    return 'boolean'
+  }
+  return 'text'
+}
+
+const renderSettingsFieldControl = (field: ResolvedStructuredField) => {
+  if (field.controlType === 'boolean') {
+    const value = normalizedBooleanLiteral(field.value) || 'False'
+    return `
+      <select ${field.editable ? '' : 'disabled'} data-setting-section="${escapeHtml(field.section)}" data-setting-key="${escapeHtml(field.key)}">
+        <option value="True" ${value === 'True' ? 'selected' : ''}>开启</option>
+        <option value="False" ${value === 'False' ? 'selected' : ''}>关闭</option>
+      </select>
+    `
+  }
+  if (field.controlType === 'password') {
+    return `<input type="password" value="${escapeHtml(field.value)}" ${field.editable ? '' : 'readonly'} data-setting-section="${escapeHtml(field.section)}" data-setting-key="${escapeHtml(field.key)}" />`
+  }
+  const inputMode = field.controlType === 'number' ? 'decimal' : 'text'
+  return `<input value="${escapeHtml(field.value)}" inputmode="${inputMode}" ${field.editable ? '' : 'readonly'} data-setting-section="${escapeHtml(field.section)}" data-setting-key="${escapeHtml(field.key)}" />`
+}
+
+const prettySettingSection = (section: string) => {
+  const normalizedSection = String(section || '').trim()
+  if (!normalizedSection) {
+    return '未分组'
+  }
+  return settingsSectionLabels[normalizedSection] || normalizedSection
+}
+
+const prettySettingLabel = (field: ResolvedStructuredField) => {
+  const normalizedKey = String(field.key || '').trim()
+  const localizedLabel = normalizedKey ? localizeSettingKey(normalizedKey) : ''
+  if (localizedLabel) {
+    return localizedLabel
+  }
+  const label = String(field.label || '').trim()
+  if (label && label !== field.key) {
+    return label
+  }
+  if (!normalizedKey) {
+    return '未命名配置'
+  }
+  return prettySettingKey(normalizedKey)
+}
+
+const prettySettingDescription = (field: ResolvedStructuredField) => {
+  const hints: string[] = []
+  const sectionLabel = prettySettingSection(field.section)
+  if (sectionLabel) {
+    hints.push(`所属分组：${sectionLabel}`)
+  }
+  const validator = String(field.validator || '').trim()
+  if (validator) {
+    hints.push(`取值规则：${validator}`)
+  }
+  return hints.join(' · ')
+}
+
 const setSettingsFields = (state: RenderState, fields: ResolvedStructuredField[]) => {
   const target = body(state).querySelector<HTMLElement>('[data-role="settings-fields"]')
   if (!target) {
     return
   }
   if (fields.length === 0) {
-    target.innerHTML = '<div class="empty inline">当前文件没有可渲染的结构化配置项，可切换到文件模式直接查看原文。</div>'
+    const workspace = selectedSettingsWorkspace(state)
+    const message = workspace?.key === 'game-logs'
+      ? '日志目录默认使用原文模式，只读查看内容即可。'
+      : '这个文件没有可编辑字段，直接看原文即可。'
+    target.innerHTML = `<div class="empty inline">${escapeHtml(message)}</div>`
     return
   }
-  target.innerHTML = fields.map((field) => `
-    <label data-section="${escapeHtml(field.section)}" data-key="${escapeHtml(field.key)}">
-      <strong>${escapeHtml(field.label)}</strong>
-      <input value="${escapeHtml(field.value)}" ${field.editable ? '' : 'readonly'} data-setting-section="${escapeHtml(field.section)}" data-setting-key="${escapeHtml(field.key)}" />
-      <span>${escapeHtml(field.validator)}</span>
-    </label>
+  const groupedFields = fields.reduce<Array<{ section: string; sectionLabel: string; fields: ResolvedStructuredField[] }>>((groups, field) => {
+    const currentGroup = groups[groups.length - 1]
+    if (currentGroup && currentGroup.section === field.section) {
+      currentGroup.fields.push(field)
+      return groups
+    }
+    groups.push({ section: field.section, sectionLabel: field.sectionLabel || prettySettingSection(field.section), fields: [field] })
+    return groups
+  }, [])
+  target.innerHTML = groupedFields.map((group) => `
+    <section class="field-section" data-section="${escapeHtml(group.section)}">
+      <div class="field-section-head">
+        <div>
+          <strong>${escapeHtml(group.sectionLabel)}</strong>
+          <p>${escapeHtml(settingsSectionHints[group.section] || '按中文字段名快速查看和调整当前分组配置。')}</p>
+        </div>
+        <span>${escapeHtml(`${group.fields.length} 项配置`)}</span>
+      </div>
+      ${group.fields.map((field) => `
+        <label data-section="${escapeHtml(field.section)}" data-key="${escapeHtml(field.key)}" data-editable="${field.editable ? 'true' : 'false'}">
+          <div class="settings-field-copy">
+            <strong>${escapeHtml(prettySettingLabel(field))}</strong>
+            <span class="settings-field-meta">${escapeHtml(prettySettingDescription(field))}</span>
+          </div>
+          <div class="settings-field-control">
+            ${renderSettingsFieldControl(field)}
+            <span class="settings-field-path">${escapeHtml(`配置键：${field.key}`)}</span>
+          </div>
+        </label>
+      `).join('')}
+    </section>
   `).join('')
-  target.querySelectorAll<HTMLInputElement>('input[data-setting-section]').forEach((input) => {
-    input.addEventListener('input', () => {
+  const bindFieldMutation = (element: HTMLInputElement | HTMLSelectElement) => {
+    element.addEventListener('input', () => {
       const editor = body(state).querySelector<HTMLTextAreaElement>('[data-role="settings-editor"]')
-      if (!editor || input.readOnly) {
+      const readOnly = element instanceof HTMLInputElement ? element.readOnly : element.disabled
+      if (!editor || readOnly) {
         return
       }
-      editor.value = updateIniValue(editor.value, input.dataset.settingSection || '', input.dataset.settingKey || '', input.value)
+      editor.value = updateIniValue(editor.value, element.dataset.settingSection || '', element.dataset.settingKey || '', element.value)
       syncSettingsEditorState(state, fields, editor.dataset.structuredPath || '')
     })
+  }
+  target.querySelectorAll<HTMLInputElement>('input[data-setting-section]').forEach(bindFieldMutation)
+  target.querySelectorAll<HTMLSelectElement>('select[data-setting-section]').forEach((select) => {
+    bindFieldMutation(select)
+    select.addEventListener('change', () => select.dispatchEvent(new Event('input')))
   })
 }
 
 const resolveEditableSettingsFields = (definitions: StructuredField[], content: string, editable: boolean) => {
-  const known = new Map(definitions.map((definition) => [`${definition.section}.${definition.key}`, definition]))
-  const values = parseIniValues(content)
-  const fields: ResolvedStructuredField[] = []
-  for (const [id, value] of Object.entries(values)) {
-    const definition = known.get(id)
-    if (definition) {
-      fields.push({ ...definition, value: definition.sensitive ? (value ? '已设置' : '') : value, editable: editable && !definition.sensitive })
-      continue
-    }
-    const dotIndex = id.lastIndexOf('.')
-    if (dotIndex <= 0) {
-      continue
-    }
-    const section = id.slice(0, dotIndex)
-    const key = id.slice(dotIndex + 1)
-    fields.push({ section, key, label: key, validator: section, value, editable })
+  const definitionByID = new Map<string, StructuredField>()
+  for (const definition of definitions) {
+    definitionByID.set(structuredFieldID(definition.section, definition.key), definition)
   }
-  return fields.slice(0, 80)
+  const entries = parseIniEntries(content)
+  const fields: ResolvedStructuredField[] = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    const fieldID = structuredFieldID(entry.section, entry.key)
+    if (seen.has(fieldID)) {
+      continue
+    }
+    seen.add(fieldID)
+    const definition = definitionByID.get(fieldID)
+    const baseField: StructuredField = definition || {
+      section: entry.section,
+      sectionLabel: prettySettingSection(entry.section),
+      key: entry.key,
+      label: localizeSettingKey(entry.key) || prettySettingKey(entry.key),
+      validator: '',
+    }
+    fields.push({
+      ...baseField,
+      value: entry.value,
+      controlType: resolveFieldControlType(baseField, entry.value),
+      editable: editable,
+    })
+  }
+  return fields
+}
+
+const prettySettingKey = (key: string) => {
+  const normalizedKey = String(key || '').trim()
+  if (!normalizedKey) {
+    return '-'
+  }
+  const withoutPrefix = normalizedKey.replace(/^scum\./i, '')
+  return withoutPrefix
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
 }
 
 const updateIniValue = (content: string, section: string, key: string, value: string) => {
@@ -1871,20 +3575,8 @@ const updateIniValue = (content: string, section: string, key: string, value: st
   return content
 }
 
-const fileNameFromPath = (path: string) => {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] || path
-}
-
 const setLogText = (state: RenderState, text: string) => {
   const target = body(state).querySelector<HTMLElement>('[data-role="logs"]')
-  if (target) {
-    target.textContent = text
-  }
-}
-
-const setTextRole = (state: RenderState, role: string, text: string) => {
-  const target = body(state).querySelector<HTMLElement>(`[data-role="${role}"]`)
   if (target) {
     target.textContent = text
   }
@@ -1956,8 +3648,8 @@ const routeFailurePresentation = (route: DomainRoute, error: unknown) => {
     return {
       state: 'failed' as const,
       reasonCode: 'plugin_session_unavailable',
-      summary: `${route.title} 当前无法连接到 SCUM 管理服务会话，通常是插件运行时、执行端或桥接会话尚未恢复。`,
-      nextAction: '请先刷新服务器状态；如果仍未恢复，请让具备管理权限的协作者修复服务或重启 SCUM 管理插件。',
+      summary: `${route.title} 当前无法连接到服务会话，通常是插件运行时、执行端或桥接会话尚未恢复。`,
+      nextAction: '请先刷新服务器状态；如果仍未恢复，请让具备管理权限的协作者修复服务或重启插件运行时。',
       code,
       message
     }
@@ -1966,7 +3658,7 @@ const routeFailurePresentation = (route: DomainRoute, error: unknown) => {
     return {
       state: 'denied' as const,
       reasonCode: 'platform_session_expired',
-      summary: '平台登录状态已过期，当前无法继续访问这个 SCUM 管理页面。',
+      summary: '平台登录状态已过期，当前无法继续访问这个页面。',
       nextAction: '请重新登录平台后重试。',
       code,
       message
@@ -2101,6 +3793,9 @@ const operationSummary = (envelope: PluginEnvelope) => {
     const status = envelope.operation.status || envelope.state || 'pending_dispatch'
     const summary = envelope.operation.summary || envelope.summary || ''
     return `${id} - ${status}${summary ? ` - ${summary}` : ''}`
+  }
+  if (envelope.state === 'available' && envelope.summary) {
+    return envelope.summary
   }
   return envelope.unavailable?.summary || envelope.error?.message || '操作未能提交。'
 }

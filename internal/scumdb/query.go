@@ -26,7 +26,9 @@ var templates = map[string]string{
 	"vehicles.summary":      "SELECT id, vehicle_type, owner_prisoner_id FROM vehicle ORDER BY id LIMIT ?",
 	"vehicles.detail":       "SELECT v.id, COALESCE(v.vehicle_type, '') AS vehicleType, COALESCE(v.owner_prisoner_id, 0) AS ownerPrisonerId, COALESCE(e.location_x, 0.0) AS locationX, COALESCE(e.location_y, 0.0) AS locationY, COALESCE(e.location_z, 0.0) AS locationZ FROM vehicle v LEFT JOIN entity e ON e.id = v.entity_id WHERE v.id = ? LIMIT 1",
 	"territories.summary":   "SELECT be.element_id AS territoryId, COALESCE(up.user_id, '') AS ownerSteamId, COALESCE(up.name, up.fake_name, '') AS ownerName, COALESCE(s.name, '') AS squadName, COALESCE(be.location_x, 0.0) AS locationX, COALESCE(be.location_y, 0.0) AS locationY, COALESCE(be.location_z, 0.0) AS locationZ FROM base_element be LEFT JOIN user_profile up ON up.id = be.owner_profile_id LEFT JOIN squad_member sm ON sm.user_profile_id = be.owner_profile_id AND sm.rank = 4 LEFT JOIN squad s ON s.id = sm.squad_id WHERE be.asset LIKE '%Flag%' ORDER BY be.element_id DESC LIMIT ?",
-	"squads.summary":        "SELECT s.id AS squadId, COALESCE(s.name, '') AS squadName, COUNT(sm.id) AS memberCount FROM squad s LEFT JOIN squad_member sm ON sm.squad_id = s.id GROUP BY s.id, s.name ORDER BY s.id DESC LIMIT ?",
+	"squads.summary":        "SELECT s.id AS squadId, COALESCE(s.name, '') AS squadName, COUNT(sm.id) AS memberCount, COALESCE(MAX(CASE WHEN sm.rank = 4 THEN up.user_id ELSE '' END), '') AS leaderSteamId, COALESCE(MAX(CASE WHEN sm.rank = 4 THEN COALESCE(NULLIF(TRIM(up.fake_name), ''), NULLIF(TRIM(up.name), ''), '') ELSE '' END), '') AS leaderName, MAX(p.last_save_time) AS lastSeen FROM squad s LEFT JOIN squad_member sm ON sm.squad_id = s.id LEFT JOIN user_profile up ON up.id = sm.user_profile_id LEFT JOIN prisoner p ON p.user_profile_id = sm.user_profile_id GROUP BY s.id, s.name ORDER BY s.id DESC LIMIT ?",
+	"squads.members":        "SELECT s.id AS squadId, COALESCE(s.name, '') AS squadName, COALESCE(p.id, 0) AS playerId, COALESCE(up.user_id, '') AS steamId, COALESCE(NULLIF(TRIM(up.fake_name), ''), NULLIF(TRIM(up.name), ''), 'Unknown Player') AS name, sm.rank AS squadRank, CASE WHEN sm.rank = 4 THEN '队长' ELSE '成员' END AS squadRole, CASE WHEN COALESCE(p.is_alive, 0) <> 0 THEN '在线' ELSE '离线' END AS status, COALESCE(e.location_x, 0.0) AS locationX, COALESCE(e.location_y, 0.0) AS locationY, COALESCE(e.location_z, 0.0) AS locationZ, p.last_save_time AS lastSeen FROM squad s INNER JOIN squad_member sm ON sm.squad_id = s.id LEFT JOIN user_profile up ON up.id = sm.user_profile_id LEFT JOIN prisoner p ON p.user_profile_id = sm.user_profile_id LEFT JOIN prisoner_entity pe ON pe.prisoner_id = p.id LEFT JOIN entity e ON e.id = pe.entity_id WHERE s.id = ? ORDER BY sm.rank DESC, COALESCE(NULLIF(TRIM(up.fake_name), ''), NULLIF(TRIM(up.name), ''), up.user_id, CAST(sm.id AS TEXT)) LIMIT ?",
+	"squads.vehicles":       "SELECT s.id AS squadId, COALESCE(s.name, '') AS squadName, v.id AS id, COALESCE(v.vehicle_type, '') AS vehicleType, COALESCE(v.owner_prisoner_id, 0) AS ownerPrisonerId, COALESCE(NULLIF(TRIM(up.fake_name), ''), NULLIF(TRIM(up.name), ''), '') AS ownerName, COALESCE(up.user_id, '') AS ownerSteamId, COALESCE(e.location_x, 0.0) AS locationX, COALESCE(e.location_y, 0.0) AS locationY, COALESCE(e.location_z, 0.0) AS locationZ FROM squad s INNER JOIN squad_member sm ON sm.squad_id = s.id INNER JOIN prisoner p ON p.user_profile_id = sm.user_profile_id INNER JOIN vehicle v ON v.owner_prisoner_id = p.id LEFT JOIN user_profile up ON up.id = p.user_profile_id LEFT JOIN entity e ON e.id = v.entity_id WHERE s.id = ? ORDER BY v.id DESC LIMIT ?",
 	"locks.summary":         "SELECT l.id, COALESCE(l.lock_type, '') AS lockType, COALESCE(l.owner_prisoner_id, 0) AS ownerPrisonerId, COALESCE(e.location_x, 0.0) AS locationX, COALESCE(e.location_y, 0.0) AS locationY, COALESCE(e.location_z, 0.0) AS locationZ FROM lock l LEFT JOIN entity e ON e.id = l.entity_id ORDER BY l.id DESC LIMIT ?",
 	"locks.records":         "SELECT id, lock_id AS lockId, actor_user_profile_id AS actorUserId, result AS result, created_at AS createdAt FROM lock_access_log ORDER BY created_at DESC LIMIT ?",
 	"world.zones":           "SELECT id, name FROM zone ORDER BY id LIMIT ?",
@@ -78,6 +80,18 @@ var templateArgumentBuilders = map[string]func(QueryRequest, int) ([]any, []Vali
 		}
 		return []any{id}, nil
 	},
+	"squads.members":  buildSquadScopedArgs,
+	"squads.vehicles": buildSquadScopedArgs,
+}
+
+// buildSquadScopedArgs builds SQL args for squad-scoped read templates.
+// request contains entity or subject identifiers supplied by the route query, limit is the bounded row cap, and the function returns squad ID plus limit or validation errors when the squad ID is missing.
+func buildSquadScopedArgs(request QueryRequest, limit int) ([]any, []ValidationError) {
+	id := strings.TrimSpace(firstNonEmpty(request.EntityID, request.SubjectID))
+	if id == "" {
+		return nil, []ValidationError{{Field: "entityId", Code: "required", Message: "entity id is required for squad-scoped template"}}
+	}
+	return []any{id, limit}, nil
 }
 
 // BuildPlan validates a SCUM.db query request and returns a bounded read-only query plan.

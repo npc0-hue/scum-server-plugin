@@ -8,16 +8,248 @@ import (
 	"strings"
 )
 
-var supportedSettings = map[string]settingRule{
-	"scum.server:servername":       {section: "SCUM.Server", key: "ServerName", kind: "string", maxLength: 128, label: "服务器名称", validator: "1-128 字符"},
-	"scum.server:maxplayers":       {section: "SCUM.Server", key: "MaxPlayers", kind: "int", min: 1, max: 256, label: "最大玩家数", validator: "1-256"},
-	"scum.server:serverpassword":   {section: "SCUM.Server", key: "ServerPassword", kind: "string", maxLength: 128, sensitive: true, label: "服务器密码", validator: "0-128 字符"},
-	"scum.server:adminpassword":    {section: "SCUM.Server", key: "AdminPassword", kind: "string", maxLength: 128, sensitive: true, label: "管理员密码", validator: "0-128 字符"},
-	"scum.server:allowfirstperson": {section: "SCUM.Server", key: "AllowFirstPerson", kind: "bool", label: "允许第一人称", validator: "true / false"},
-	"scum.server:allowthirdperson": {section: "SCUM.Server", key: "AllowThirdPerson", kind: "bool", label: "允许第三人称", validator: "true / false"},
-	"scum.server:enablebattley":    {section: "SCUM.Server", key: "EnableBattleye", kind: "bool", label: "启用 BattlEye", validator: "true / false"},
-	"scum.server:enablevac":        {section: "SCUM.Server", key: "EnableVAC", kind: "bool", label: "启用 VAC", validator: "true / false"},
+var supportedSettingRules = []settingRule{
+	{
+		section:   "General",
+		key:       "scum.ServerName",
+		kind:      "string",
+		maxLength: 128,
+		label:     "服务器名称",
+		validator: "1-128 字符",
+		aliases:   []settingAlias{{Section: "SCUM.Server", Key: "ServerName"}},
+	},
+	{
+		section:   "General",
+		key:       "scum.MaxPlayers",
+		kind:      "int",
+		min:       1,
+		max:       256,
+		label:     "最大玩家数",
+		validator: "1-256",
+		aliases:   []settingAlias{{Section: "SCUM.Server", Key: "MaxPlayers"}},
+	},
+	{
+		section:   "General",
+		key:       "scum.ServerPassword",
+		kind:      "string",
+		maxLength: 128,
+		sensitive: true,
+		label:     "服务器密码",
+		validator: "0-128 字符",
+		aliases:   []settingAlias{{Section: "SCUM.Server", Key: "ServerPassword"}},
+	},
+	{
+		section:   "General",
+		key:       "scum.ServerPlaystyle",
+		kind:      "string",
+		maxLength: 64,
+		label:     "服务器玩法",
+		validator: "0-64 字符",
+	},
+	{
+		section:   "General",
+		key:       "scum.WelcomeMessage",
+		kind:      "string",
+		maxLength: 2048,
+		label:     "欢迎消息",
+		validator: "0-2048 字符",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowFirstPerson",
+		kind:      "bool",
+		label:     "允许第一人称",
+		validator: "true / false",
+		aliases:   []settingAlias{{Section: "SCUM.Server", Key: "AllowFirstPerson"}},
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowThirdPerson",
+		kind:      "bool",
+		label:     "允许第三人称",
+		validator: "true / false",
+		aliases:   []settingAlias{{Section: "SCUM.Server", Key: "AllowThirdPerson"}},
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowCrosshair",
+		kind:      "bool",
+		label:     "允许准星",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowMapScreen",
+		kind:      "bool",
+		label:     "允许地图",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowGlobalChat",
+		kind:      "bool",
+		label:     "允许全局聊天",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.MaxPing",
+		kind:      "float",
+		label:     "最大延迟",
+		validator: "数字",
+	},
+	{
+		section:   "General",
+		key:       "scum.MessageOfTheDayCooldown",
+		kind:      "float",
+		label:     "每日消息冷却时间",
+		validator: "数字",
+	},
+	{
+		section:   "General",
+		key:       "scum.MinServerTickRate",
+		kind:      "int",
+		label:     "最小服务器 Tick Rate",
+		validator: "整数",
+	},
+	{
+		section:   "General",
+		key:       "scum.MaxServerTickRate",
+		kind:      "int",
+		label:     "最大服务器 Tick Rate",
+		validator: "整数",
+	},
+	{
+		section:   "General",
+		key:       "scum.LogoutTimer",
+		kind:      "float",
+		label:     "登出等待时间",
+		validator: "数字",
+	},
+	{
+		section:   "General",
+		key:       "scum.LogoutTimerWhileCaptured",
+		kind:      "float",
+		label:     "被控制时登出等待时间",
+		validator: "数字",
+	},
+	{
+		section:   "General",
+		key:       "scum.LogoutTimerInBunker",
+		kind:      "float",
+		label:     "地堡内登出等待时间",
+		validator: "数字",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowVoting",
+		kind:      "bool",
+		label:     "允许投票",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowKillClaiming",
+		kind:      "bool",
+		label:     "允许击杀认领",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowComa",
+		kind:      "bool",
+		label:     "允许昏迷",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowMinesAndTraps",
+		kind:      "bool",
+		label:     "允许地雷和陷阱",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowSkillGainInSafeZones",
+		kind:      "bool",
+		label:     "允许在安全区获得技能经验",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowEvents",
+		kind:      "bool",
+		label:     "允许事件",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.LimitGlobalChat",
+		kind:      "bool",
+		label:     "限制全局聊天",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowLocalChat",
+		kind:      "bool",
+		label:     "允许本地聊天",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowSquadChat",
+		kind:      "bool",
+		label:     "允许小队聊天",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.AllowAdminChat",
+		kind:      "bool",
+		label:     "允许管理员聊天",
+		validator: "true / false",
+	},
+	{
+		section:   "General",
+		key:       "scum.RustyLocksLogging",
+		kind:      "bool",
+		label:     "记录生锈锁日志",
+		validator: "true / false",
+	},
+	{
+		section:   "World",
+		key:       "scum.MaxAllowedZombies",
+		kind:      "int",
+		min:       -1,
+		max:       1000000,
+		label:     "最大僵尸数",
+		validator: "-1 到 1000000",
+	},
+	{
+		section:   "World",
+		key:       "scum.ExteriorZombieAmountModifier",
+		kind:      "float",
+		label:     "户外僵尸倍率",
+		validator: "数字",
+	},
+	{
+		section:   "World",
+		key:       "scum.InteriorZombieAmountModifier",
+		kind:      "float",
+		label:     "室内僵尸倍率",
+		validator: "数字",
+	},
+	{
+		section:   "World",
+		key:       "scum.WildZombieAmountModifier",
+		kind:      "float",
+		label:     "野外僵尸倍率",
+		validator: "数字",
+	},
 }
+
+var supportedSettings = buildSupportedSettings(supportedSettingRules)
 
 type settingRule struct {
 	// section 是配置项所在的 INI 分组名称。
@@ -38,6 +270,60 @@ type settingRule struct {
 	label string
 	// validator 是前端展示的校验规则摘要。
 	validator string
+	// aliases 是兼容旧版 section/key 请求时接受的别名列表。
+	aliases []settingAlias
+}
+
+// settingAlias 表示一个受支持配置键的历史别名。
+type settingAlias struct {
+	// Section 是旧请求使用的 INI 分组名称。
+	Section string
+	// Key 是旧请求使用的配置键名称。
+	Key string
+}
+
+// buildSupportedSettings builds one lookup map for canonical SCUM settings and historical aliases.
+// rules contains the canonical rule list plus any accepted aliases, and the function returns a normalized lookup map or panics when duplicate identifiers exist.
+func buildSupportedSettings(rules []settingRule) map[string]settingRule {
+	lookup := make(map[string]settingRule, len(rules)*2)
+	for _, rule := range rules {
+		canonicalID := settingID(rule.section, rule.key)
+		if canonicalID == "" {
+			panic("scumconfig: empty canonical setting id")
+		}
+		if _, exists := lookup[canonicalID]; exists {
+			panic("scumconfig: duplicate canonical setting id: " + canonicalID)
+		}
+		lookup[canonicalID] = rule
+		for _, alias := range rule.aliases {
+			aliasID := settingID(alias.Section, alias.Key)
+			if aliasID == "" {
+				panic("scumconfig: empty alias setting id")
+			}
+			if _, exists := lookup[aliasID]; exists {
+				panic("scumconfig: duplicate alias setting id: " + aliasID)
+			}
+			lookup[aliasID] = rule
+		}
+	}
+	return lookup
+}
+
+// normalizeSupportedChange maps one incoming change onto the canonical SCUM section/key pair when the setting is known.
+// change contains the raw request identifiers and value, and the function returns the normalized change plus whether the setting matched the curated quick-edit catalog.
+func normalizeSupportedChange(change Change) (Change, bool) {
+	normalized := Change{
+		Section: strings.TrimSpace(change.Section),
+		Key:     strings.TrimSpace(change.Key),
+		Value:   strings.TrimSpace(change.Value),
+	}
+	rule, ok := supportedSettings[settingID(normalized.Section, normalized.Key)]
+	if !ok {
+		return normalized, false
+	}
+	normalized.Section = rule.section
+	normalized.Key = rule.key
+	return normalized, true
 }
 
 // Parse parses ServerSettings.ini content into ordered sections and entries.
@@ -83,7 +369,8 @@ func ApplyChanges(content string, changes []Change) (string, error) {
 	}
 	pending := make(map[string]Change, len(changes))
 	for _, change := range changes {
-		pending[settingID(change.Section, change.Key)] = change
+		normalized, _ := normalizeSupportedChange(change)
+		pending[settingID(normalized.Section, normalized.Key)] = normalized
 	}
 	lines := strings.Split(content, "\n")
 	currentSection := ""
@@ -138,18 +425,16 @@ func ValidateChanges(request PatchRequest) (PatchPlan, []ValidationError) {
 	normalized := make([]Change, 0, len(request.Changes))
 	seen := map[string]bool{}
 	for index, change := range request.Changes {
-		change.Section = strings.TrimSpace(change.Section)
-		change.Key = strings.TrimSpace(change.Key)
-		change.Value = strings.TrimSpace(change.Value)
+		change, known := normalizeSupportedChange(change)
 		id := settingID(change.Section, change.Key)
-		rule, ok := supportedSettings[id]
 		field := fmt.Sprintf("changes[%d]", index)
 		if seen[id] {
 			errs = append(errs, ValidationError{Field: field, Code: "duplicate_setting", Message: "setting appears more than once"})
 			continue
 		}
 		seen[id] = true
-		if ok {
+		if known {
+			rule := supportedSettings[id]
 			if err := validateValue(rule, change.Value); err != nil {
 				errs = append(errs, ValidationError{Field: field + ".value", Code: "invalid_value", Message: err.Error()})
 				continue
@@ -225,8 +510,8 @@ func SupportedSettings() []string {
 // FieldDefinitions returns the structured field metadata for plugin-owned settings surfaces.
 // It takes no parameters and returns stable field definitions ordered for frontend rendering.
 func FieldDefinitions() []FieldDefinition {
-	definitions := make([]FieldDefinition, 0, len(supportedSettings))
-	for _, rule := range supportedSettings {
+	definitions := make([]FieldDefinition, 0, len(supportedSettingRules))
+	for _, rule := range supportedSettingRules {
 		definitions = append(definitions, FieldDefinition{
 			Section:   strings.TrimSpace(rule.section),
 			Key:       strings.TrimSpace(rule.key),
@@ -258,6 +543,11 @@ func validateValue(rule settingRule, value string) error {
 		default:
 			return errors.New("value must be boolean")
 		}
+	case "float":
+		if _, err := strconv.ParseFloat(value, 64); err != nil {
+			return errors.New("value must be number")
+		}
+		return nil
 	case "int":
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
